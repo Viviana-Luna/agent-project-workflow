@@ -1,0 +1,7 @@
+version = 1
+vault_root = "/path/to/your/obsidian-vault"
+projects_root = "Myproject"
+
+[projects]
+# 只有仓库重名或需要特殊目录时才添加显式映射。
+# "/path/to/source/example-project" = "Myproject/example-project"

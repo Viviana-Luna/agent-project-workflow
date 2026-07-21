@@ -1,0 +1,8 @@
+id = "kimi-code"
+display_name = "Kimi Code"
+detect_commands = ["kimi"]
+rule_template = "adapters/kimi-code/AGENTS.md"
+rule_target = "~/.kimi-code/AGENTS.md"
+rule_home_env = "KIMI_CODE_HOME"
+skills_target = "~/.agents/skills"
+validator = []

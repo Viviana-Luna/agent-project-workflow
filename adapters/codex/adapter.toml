@@ -1,0 +1,7 @@
+id = "codex"
+display_name = "Codex"
+detect_commands = ["codex"]
+rule_template = "adapters/codex/AGENTS.md"
+rule_target = "~/.codex/AGENTS.md"
+skills_target = "~/.agents/skills"
+validator = []

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Obsidian 项目工作流初始化"
+  short_description: "在 Myproject 下初始化项目开发工作区"
+  default_prompt: "使用 $agent-dev-workflow-init 在 Obsidian 的 Myproject 下初始化或整理当前项目工作区，并保持仓库公开入口一致。"

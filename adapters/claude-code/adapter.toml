@@ -1,0 +1,7 @@
+id = "claude-code"
+display_name = "Claude Code"
+detect_commands = ["claude"]
+rule_template = "adapters/codex/AGENTS.md"
+rule_target = "~/.claude/CLAUDE.md"
+skills_target = "~/.claude/skills"
+validator = []

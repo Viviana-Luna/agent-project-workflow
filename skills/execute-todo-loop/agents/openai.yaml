@@ -1,0 +1,4 @@
+interface:
+  display_name: "执行 TODO 闭环"
+  short_description: "按计划核对代码并完成单个 TODO 的实现、审查与提交"
+  default_prompt: "使用 $execute-todo-loop 从当前仓库选择一个可执行 TODO，核对计划和真实代码后创建单任务 Goal，完成实现、验证、审查、提交及仓库规则允许的本地分支收口；不要推送或发布。"

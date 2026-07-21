@@ -1,0 +1,45 @@
+name: 持续集成
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 运行单元测试
+        run: python3 -m unittest discover -s tests -v
+      - name: 运行仓库验证
+        run: python3 scripts/validate.py
+      - name: 构建并检查 ZipApp
+        run: |
+          python3 scripts/build_release.py --output dist
+          python3 dist/apw.pyz --version
+          sh dist/install.sh --dry-run
+      - name: 校验发布资产（Linux）
+        if: runner.os == 'Linux'
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS
+      - name: 校验发布资产（macOS）
+        if: runner.os == 'macOS'
+        working-directory: dist
+        run: shasum -a 256 -c SHA256SUMS
+      - name: 全新 HOME Bootstrap 与诊断
+        run: |
+          APW_SMOKE_HOME="$RUNNER_TEMP/apw-home"
+          APW_SMOKE_VAULT="$RUNNER_TEMP/apw-vault"
+          mkdir -p "$APW_SMOKE_VAULT"
+          APW_INSTALL_HOME="$APW_SMOKE_HOME" APW_BOOTSTRAP_SKIP_WIZARD=1 APW_PYZ_SOURCE="$GITHUB_WORKSPACE/dist/apw.pyz" sh dist/install.sh
+          "$APW_SMOKE_HOME/.local/bin/apw" install --clients codex,claude-code,kimi-code,opencode --vault-root "$APW_SMOKE_VAULT" --non-interactive --yes
+          "$APW_SMOKE_HOME/.local/bin/apw" doctor

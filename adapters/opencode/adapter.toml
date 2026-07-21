@@ -1,0 +1,7 @@
+id = "opencode"
+display_name = "OpenCode"
+detect_commands = ["opencode"]
+rule_template = "adapters/codex/AGENTS.md"
+rule_target = "~/.config/opencode/AGENTS.md"
+skills_target = "~/.agents/skills"
+validator = []

@@ -1,0 +1,4 @@
+interface:
+  display_name: "迁移项目工作流到 Obsidian"
+  short_description: "安全迁移项目私有工作流并完成 Obsidian 验收"
+  default_prompt: "使用 $migrate-project-workflow-to-obsidian 将当前项目的旧 .agent 工作流安全迁移到 Obsidian，并完成去密、校验和旧目录收口。"
