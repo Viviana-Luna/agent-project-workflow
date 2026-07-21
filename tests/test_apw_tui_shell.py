@@ -4,9 +4,18 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from apw.shell import PATH_END, PATH_START, remove_path_profile, update_path_profile
 from apw.tui import Choice, choose_one, select_many
+
+
+class TtyBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return 42
 
 
 class TuiAndShellTests(unittest.TestCase):
@@ -40,6 +49,48 @@ class TuiAndShellTests(unittest.TestCase):
             output_stream=io.StringIO(),
         )
         self.assertEqual(selected, "status")
+
+    def test_tty_multi_select_uses_carriage_return_and_correct_redraw_height(self) -> None:
+        input_stream = TtyBuffer("\x1b[B\r")
+        output_stream = TtyBuffer()
+        with (
+            mock.patch("termios.tcgetattr", return_value=[0]),
+            mock.patch("termios.tcsetattr"),
+            mock.patch("tty.setraw"),
+        ):
+            selected = select_many(
+                "选择客户端",
+                [Choice("codex", "Codex"), Choice("claude", "Claude Code")],
+                {"codex", "claude"},
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
+        rendered = output_stream.getvalue()
+        self.assertEqual(selected, ["codex", "claude"])
+        self.assertIn("选择客户端\r\n", rendered)
+        self.assertIn("Codex\r\n", rendered)
+        self.assertIn("\x1b[3A", rendered)
+
+    def test_tty_single_select_redraws_without_diagonal_drift(self) -> None:
+        input_stream = TtyBuffer("\x1b[B\r")
+        output_stream = TtyBuffer()
+        with (
+            mock.patch("termios.tcgetattr", return_value=[0]),
+            mock.patch("termios.tcsetattr"),
+            mock.patch("tty.setraw"),
+        ):
+            selected = choose_one(
+                "选择操作",
+                [Choice("install", "安装"), Choice("status", "状态")],
+                "install",
+                input_stream=input_stream,
+                output_stream=output_stream,
+            )
+        rendered = output_stream.getvalue()
+        self.assertEqual(selected, "status")
+        self.assertIn("选择操作\r\n", rendered)
+        self.assertIn("安装\r\n", rendered)
+        self.assertIn("\x1b[3A", rendered)
 
     def test_path_managed_block_preserves_other_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

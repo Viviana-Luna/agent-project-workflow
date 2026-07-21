@@ -143,12 +143,12 @@ def _select_many_tty(
     try:
         tty.setraw(descriptor)
         while True:
-            output_stream.write(f"\r\x1b[2K{title}\n")
+            output_stream.write(f"\r\x1b[2K{title}\r\n")
             for index, choice in enumerate(choices):
                 cursor = ">" if index == current else " "
                 marker = "x" if choice.value in selected else " "
                 suffix = f" — {choice.description}" if choice.description else ""
-                output_stream.write(f"\x1b[2K {cursor} [{marker}] {choice.label}{suffix}\n")
+                output_stream.write(f"\x1b[2K {cursor} [{marker}] {choice.label}{suffix}\r\n")
             output_stream.write("\x1b[2K↑↓ 移动  Space 选择  Enter 继续  Q 退出")
             output_stream.flush()
             key = input_stream.read(1)
@@ -168,7 +168,7 @@ def _select_many_tty(
                 break
             elif key.lower() == "q" or key == "\x03":
                 raise KeyboardInterrupt
-            output_stream.write(f"\x1b[{len(choices) + 2}A")
+            output_stream.write(f"\x1b[{len(choices) + 1}A")
     finally:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
         output_stream.write("\x1b[?25h\n")
@@ -193,11 +193,11 @@ def _choose_one_tty(
     try:
         tty.setraw(descriptor)
         while True:
-            output_stream.write(f"\r\x1b[2K{title}\n")
+            output_stream.write(f"\r\x1b[2K{title}\r\n")
             for index, choice in enumerate(choices):
                 cursor = ">" if index == current else " "
                 suffix = f" — {choice.description}" if choice.description else ""
-                output_stream.write(f"\x1b[2K {cursor} {choice.label}{suffix}\n")
+                output_stream.write(f"\x1b[2K {cursor} {choice.label}{suffix}\r\n")
             output_stream.write("\x1b[2K↑↓ 移动  Enter 选择  Q 退出")
             output_stream.flush()
             key = input_stream.read(1)
@@ -211,7 +211,7 @@ def _choose_one_tty(
                 return choices[current].value
             elif key.lower() == "q" or key == "\x03":
                 raise KeyboardInterrupt
-            output_stream.write(f"\x1b[{len(choices) + 2}A")
+            output_stream.write(f"\x1b[{len(choices) + 1}A")
     finally:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
         output_stream.write("\x1b[?25h\n")
