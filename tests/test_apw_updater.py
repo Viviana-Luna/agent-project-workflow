@@ -198,9 +198,12 @@ class UpdaterTests(unittest.TestCase):
             def fetcher(url: str) -> bytes:
                 return manifest if url == "memory://manifest" else payload
 
-            with mock.patch(
-                "apw.updater.LifecycleManager.doctor",
-                return_value=[Finding("error", "simulated", "模拟失败")],
+            with (
+                mock.patch("apw.state.utc_now", return_value="2099-01-01T00:00:00+00:00"),
+                mock.patch(
+                    "apw.updater.LifecycleManager.doctor",
+                    return_value=[Finding("error", "simulated", "模拟失败")],
+                ),
             ):
                 with self.assertRaisesRegex(UpdateError, "诊断失败"):
                     UpdateManager(paths, fetcher).update(manifest_url="memory://manifest")

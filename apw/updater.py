@@ -194,6 +194,7 @@ class UpdateManager:
         snapshot_paths.extend(change.path for change in planned)
         excluded = {change.path.resolve() for change in conflicts} if conflict_policy == "replace" else set()
         previous_current = self._current_target()
+        previous_state = self.paths.state_file.read_bytes() if self.paths.state_file.is_file() else None
         with tempfile.TemporaryDirectory(prefix="apw-update-rollback-") as temp:
             rollback_root = Path(temp)
             snapshots = self._snapshot([path for path in snapshot_paths if path.resolve() not in excluded], rollback_root)
@@ -214,7 +215,10 @@ class UpdateManager:
                 return checked, result
             except Exception:
                 self._restore(snapshots)
-                save_state(self.paths.state_file, state)
+                if previous_state is None:
+                    self.paths.state_file.unlink(missing_ok=True)
+                else:
+                    atomic_write(self.paths.state_file, previous_state, mode=0o600)
                 self._restore_current(previous_current)
                 shutil.rmtree(version_dir, ignore_errors=True)
                 raise
