@@ -10,6 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from apw import __version__
 from apw.bundle import Bundle
 from apw.cli import main
 from apw.lifecycle import Finding, LifecycleManager
@@ -20,6 +21,12 @@ from scripts.build_release import build_zipapp
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def next_version() -> str:
+    """比当前版本高一个补丁号；模拟“有更新”时避免硬编码版本在发布后过期。"""
+    major, minor, patch = (int(part) for part in __version__.split("."))
+    return f"{major}.{minor}.{patch + 1}"
 
 
 def make_manifest(version: str, payload: bytes, url: str = "memory://apw.pyz") -> bytes:
@@ -103,7 +110,7 @@ class UpdaterTests(unittest.TestCase):
 
             def fetcher(url: str) -> bytes:
                 calls.append(url)
-                return make_manifest("1.0.0", b"unused")
+                return make_manifest(__version__, b"unused")
 
             manager.status()
             manager.doctor()
@@ -121,7 +128,7 @@ class UpdaterTests(unittest.TestCase):
             vault.mkdir()
             paths = AppPaths.from_home(home)
             LifecycleManager(paths, Bundle(root=ROOT), environ={}).install(["codex"], vault_root=vault)
-            manifest = make_manifest("1.0.1", b"expected")
+            manifest = make_manifest(next_version(), b"expected")
 
             def fetcher(url: str) -> bytes:
                 return manifest if url == "memory://manifest" else b"wrong"
@@ -147,7 +154,7 @@ class UpdaterTests(unittest.TestCase):
                 },
             )
             manager.install(["codex"], vault_root=vault)
-            manifest = make_manifest("1.0.1", b"unused")
+            manifest = make_manifest(next_version(), b"unused")
             updater = UpdateManager(paths, lambda _url: manifest)
             with self.assertRaisesRegex(UpdateError, "重新运行 Bootstrap"):
                 updater.update(manifest_url="memory://manifest")
@@ -177,7 +184,7 @@ class UpdaterTests(unittest.TestCase):
             LifecycleManager(paths, Bundle(root=ROOT), environ={}).install(["codex"], vault_root=vault)
             pyz = build_zipapp(build)
             payload = pyz.read_bytes()
-            manifest = make_manifest("1.0.1", payload)
+            manifest = make_manifest(next_version(), payload)
 
             def fetcher(url: str) -> bytes:
                 if url == "memory://manifest":
@@ -194,7 +201,7 @@ class UpdaterTests(unittest.TestCase):
             self.assertTrue(checked.available)
             self.assertIsNotNone(result)
             self.assertTrue(planned)
-            self.assertEqual(LifecycleManager(paths, Bundle(root=ROOT), environ={}).state().manager_version, "1.0.1")
+            self.assertEqual(LifecycleManager(paths, Bundle(root=ROOT), environ={}).state().manager_version, next_version())
             self.assertTrue((paths.current_link / "apw.pyz").is_file())
 
     def test_failed_post_install_doctor_restores_owned_files(self) -> None:
@@ -213,7 +220,7 @@ class UpdaterTests(unittest.TestCase):
             original_rule = rule.read_bytes()
             original_state = paths.state_file.read_bytes()
             payload = build_zipapp(build).read_bytes()
-            manifest = make_manifest("1.0.1", payload)
+            manifest = make_manifest(next_version(), payload)
 
             def fetcher(url: str) -> bytes:
                 return manifest if url == "memory://manifest" else payload
@@ -230,7 +237,7 @@ class UpdaterTests(unittest.TestCase):
             self.assertEqual(rule.read_bytes(), original_rule)
             self.assertEqual(paths.state_file.read_bytes(), original_state)
             self.assertFalse(paths.current_link.exists())
-            self.assertFalse((paths.versions_dir / "1.0.1").exists())
+            self.assertFalse((paths.versions_dir / next_version()).exists())
 
     def test_cli_downgrade_requires_target_and_second_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -108,7 +108,7 @@ def main() -> int:
         "schema_version": 1,
         "version": version,
         "minimum_manager_version": "1.0.0",
-        "release_notes": "首个稳定版安装与更新管理器。",
+        "release_notes": "新增 Windows 平台支持：LOCALAPPDATA 布局、junction 版本指针、注册表 PATH、install.ps1 引导。",
         "runtime": {"python": PYTHON_VERSION, "uv": UV_VERSION},
         "assets": {
             "apw.pyz": {"url": f"{base}/apw.pyz", "sha256": sha256(pyz)},
