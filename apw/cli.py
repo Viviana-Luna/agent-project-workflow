@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Iterable
 
 from . import __version__
 from .constants import DIRECT_REPLACE_PHRASE, LATEST_MANIFEST_URL, REPOSITORY_URL
+from .dialog import pick_directory
 from .lifecycle import Change, LifecycleError, LifecycleManager, OperationResult
 from .paths import AppPaths
-from .shell import path_contains, shell_profile, update_path_profile
+from .shell import (
+    add_user_path,
+    path_contains,
+    remove_path_profile,
+    remove_user_path,
+    shell_profile,
+    update_path_profile,
+    user_path_contains,
+)
 from .tui import Choice, choose_one, confirm, prompt, select_many
 from .updater import UpdateError, UpdateManager, version_tuple
 
@@ -226,14 +236,8 @@ def command_uninstall(args: argparse.Namespace, paths: AppPaths, manager: Lifecy
     interactive = not args.non_interactive
     state = manager.assert_safe_state()
     changes = manager._plan_removals(state.selected_clients, set(), state)
-    profile = shell_profile(paths.home) if not args.keep_manager else None
-    if profile and profile.exists():
-        from .shell import remove_path_profile
-
-        current_profile = profile.read_text(encoding="utf-8")
-        desired_profile = remove_path_profile(profile, dry_run=True)
-        if desired_profile != current_profile:
-            print(f"计划从 Shell 配置移除 PATH 托管区块：{profile}")
+    if not args.keep_manager:
+        _preview_path_removal(paths)
     print("\n卸载预览：")
     print(manager.format_changes(changes))
     print("将保留 Obsidian 工作区、配置文件和压缩归档。")
@@ -248,13 +252,33 @@ def command_uninstall(args: argparse.Namespace, paths: AppPaths, manager: Lifecy
         remove_manager=not args.keep_manager,
     )
     print_result(result)
-    if not args.dry_run and profile and profile.exists():
-        from .shell import remove_path_profile
-
-        remove_path_profile(profile)
+    if not args.dry_run and not args.keep_manager:
+        _remove_path(paths)
     if not args.dry_run:
         print("卸载完成；已保留 Obsidian 工作区、配置文件和压缩归档。")
     return 0
+
+
+def _preview_path_removal(paths: AppPaths) -> None:
+    if os.name == "nt":
+        if user_path_contains(paths.bin_dir):
+            print(f"计划从用户 PATH 移除：{paths.bin_dir}")
+        return
+    profile = shell_profile(paths.home)
+    if profile and profile.exists():
+        current = profile.read_text(encoding="utf-8")
+        desired = remove_path_profile(profile, dry_run=True)
+        if desired != current:
+            print(f"计划从 Shell 配置移除 PATH 托管区块：{profile}")
+
+
+def _remove_path(paths: AppPaths) -> None:
+    if os.name == "nt":
+        remove_user_path(paths.bin_dir)
+        return
+    profile = shell_profile(paths.home)
+    if profile and profile.exists():
+        remove_path_profile(profile)
 
 
 def command_update(args: argparse.Namespace, paths: AppPaths, manager: LifecycleManager) -> int:
@@ -374,37 +398,26 @@ def choose_clients(
 
 
 def choose_vault(home: Path) -> Path:
-    candidates = discover_vaults(home)
-    if candidates:
-        choices = [Choice(str(path), str(path)) for path in candidates]
-        choices.append(Choice("manual", "手动输入其他路径"))
-        selected = choose_one("请选择 Obsidian Vault", choices, str(candidates[0]))
-        if selected != "manual":
-            return Path(selected)
+    selected = choose_one(
+        "请选择 Obsidian Vault",
+        [
+            Choice("dialog", "弹窗选择文件夹", "打开系统文件夹选择对话框"),
+            Choice("manual", "手动输入路径", "直接粘贴或输入 Vault 绝对路径"),
+        ],
+        "dialog",
+    )
+    if selected == "dialog":
+        path = pick_directory("选择 Obsidian Vault 文件夹", initial_dir=str(home))
+        if path is not None:
+            if not path.is_dir():
+                raise LifecycleError(f"Obsidian Vault 不存在：{path}")
+            return path
+        print("弹窗不可用或已取消，改为手动输入。")
     value = prompt("请输入 Obsidian Vault 路径")
     path = Path(value).expanduser()
     if not path.is_dir():
         raise LifecycleError(f"Obsidian Vault 不存在：{path}")
     return path
-
-
-def discover_vaults(home: Path) -> list[Path]:
-    candidates: set[Path] = set()
-    direct = [
-        home / "Obsidian",
-        home / "Documents" / "Obsidian",
-        home / "Library" / "Mobile Documents" / "iCloud~md~obsidian" / "Documents",
-    ]
-    for path in direct:
-        if path.is_dir() and (path / ".obsidian").is_dir():
-            candidates.add(path.resolve())
-    cloud = home / "Library" / "CloudStorage"
-    if cloud.is_dir():
-        for marker in cloud.glob("*/*/.obsidian"):
-            candidates.add(marker.parent.resolve())
-        for marker in cloud.glob("*/*/*/.obsidian"):
-            candidates.add(marker.parent.resolve())
-    return sorted(candidates)
 
 
 def resolve_conflicts(
@@ -461,6 +474,15 @@ def _preview_update_plan(
 
 
 def maybe_configure_path(paths: AppPaths, interactive: bool) -> None:
+    if os.name == "nt":
+        if not paths.launcher.exists() or user_path_contains(paths.bin_dir):
+            return
+        if interactive and confirm(f"{paths.bin_dir} 不在 PATH，是否写入用户环境变量？", default=True):
+            add_user_path(paths.bin_dir)
+            print(f"已将 {paths.bin_dir} 加入用户 PATH；重新打开终端后生效。")
+        else:
+            print(f"请把 {paths.bin_dir} 添加到用户 PATH。")
+        return
     if not paths.launcher.exists() or path_contains(paths.bin_dir):
         return
     profile = shell_profile(paths.home)

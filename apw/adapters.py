@@ -21,6 +21,8 @@ class Adapter:
     skills_target: str
     rule_home_env: str | None = None
     validator: tuple[str, ...] = ()
+    rule_target_windows: str | None = None
+    skills_target_windows: str | None = None
 
     def detected(self) -> bool:
         return any(shutil.which(command) for command in self.detect_commands)
@@ -32,10 +34,12 @@ class Adapter:
             if not override.is_absolute():
                 raise ValueError(f"{self.rule_home_env} 必须是绝对路径：{override}")
             return override.resolve() / Path(self.rule_target).name
-        return expand_home(self.rule_target, home)
+        target = self.rule_target_windows if os.name == "nt" and self.rule_target_windows else self.rule_target
+        return expand_home(target, home)
 
     def skills_path(self, home: Path) -> Path:
-        return expand_home(self.skills_target, home)
+        target = self.skills_target_windows if os.name == "nt" and self.skills_target_windows else self.skills_target
+        return expand_home(target, home)
 
 
 def expand_home(value: str, home: Path) -> Path:
@@ -75,6 +79,8 @@ def load_adapters(bundle: Bundle) -> dict[str, Adapter]:
             skills_target=str(data["skills_target"]),
             rule_home_env=str(data["rule_home_env"]) if data.get("rule_home_env") else None,
             validator=tuple(str(item) for item in data.get("validator", [])),
+            rule_target_windows=str(data["rule_target_windows"]) if data.get("rule_target_windows") else None,
+            skills_target_windows=str(data["skills_target_windows"]) if data.get("skills_target_windows") else None,
         )
         template = Path(adapter.rule_template)
         if template.is_absolute() or ".." in template.parts:

@@ -52,6 +52,26 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn("# agent-project-workflow:launcher", installer)
         self.assertIn("启动器路径已被其他程序占用", installer)
 
+    def test_windows_bootstrap_keeps_uv_python_and_cache_private(self) -> None:
+        installer = (ROOT / "scripts" / "install.ps1.template").read_text(encoding="utf-8")
+        self.assertIn("--no-bin", installer)
+        self.assertIn("UV_CACHE_DIR", installer)
+        self.assertIn("UV_NO_CONFIG", installer)
+        self.assertIn("agent-project-workflow:launcher", installer)
+        self.assertIn("启动器路径已被其他程序占用", installer)
+        self.assertIn("New-Item -ItemType Junction", installer)
+        self.assertIn("chcp 65001", installer)
+        self.assertNotIn("Remove-Item $CurrentLink", installer)
+
+    def test_clear_pointer_refuses_real_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            paths = AppPaths.from_home(Path(temp) / "home")
+            real_dir = paths.data_dir / "real"
+            real_dir.mkdir(parents=True)
+            updater = UpdateManager(paths)
+            with self.assertRaises(OSError):
+                updater._clear_pointer(real_dir)
+
     def test_manifest_and_semantic_version_validation(self) -> None:
         payload = b"zipapp"
         manifest = ReleaseManifest.parse(make_manifest("1.2.3", payload))

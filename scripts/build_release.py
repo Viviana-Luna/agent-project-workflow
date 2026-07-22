@@ -68,6 +68,19 @@ def build_installer(output: Path, version: str, pyz_sha256: str) -> Path:
     return target
 
 
+def build_installer_windows(output: Path, version: str, pyz_sha256: str) -> Path:
+    template = (ROOT / "scripts" / "install.ps1.template").read_text(encoding="utf-8")
+    rendered = (
+        template.replace("@VERSION@", version)
+        .replace("@PYTHON_VERSION@", PYTHON_VERSION)
+        .replace("@UV_VERSION@", UV_VERSION)
+        .replace("@APW_SHA256@", pyz_sha256)
+    )
+    target = output / "install.ps1"
+    target.write_text(rendered, encoding="utf-8-sig")
+    return target
+
+
 def main() -> int:
     args = parse_args()
     version = args.version or current_version()
@@ -79,6 +92,7 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     pyz = build_zipapp(output)
     installer = build_installer(output, version, sha256(pyz))
+    installer_windows = build_installer_windows(output, version, sha256(pyz))
     base = f"{REPOSITORY}/releases/download/v{version}"
     manifest = {
         "schema_version": 1,
@@ -89,11 +103,12 @@ def main() -> int:
         "assets": {
             "apw.pyz": {"url": f"{base}/apw.pyz", "sha256": sha256(pyz)},
             "install.sh": {"url": f"{base}/install.sh", "sha256": sha256(installer)},
+            "install.ps1": {"url": f"{base}/install.ps1", "sha256": sha256(installer_windows)},
         },
     }
     manifest_path = output / "release-manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    assets = (pyz, installer, manifest_path)
+    assets = (pyz, installer, installer_windows, manifest_path)
     sums = "".join(f"{sha256(path)}  {path.name}\n" for path in assets)
     (output / "SHA256SUMS").write_text(sums, encoding="utf-8")
     print(f"构建完成：{output}")

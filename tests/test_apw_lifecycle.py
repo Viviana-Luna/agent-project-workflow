@@ -42,9 +42,11 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue((home / ".agents" / "skills" / "execute-todo-loop" / "SKILL.md").is_file())
             self.assertTrue((home / ".claude" / "skills" / "execute-todo-loop" / "SKILL.md").is_file())
             init_script = home / ".agents" / "skills" / "agent-dev-workflow-init" / "scripts" / "init_agent_workflow.py"
-            self.assertTrue(init_script.stat().st_mode & 0o100)
-            self.assertEqual(manager.paths.config_file.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(manager.paths.state_file.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                # Windows 无 POSIX 执行位，chmod 为空操作，仅在校验有意义的平台断言。
+                self.assertTrue(init_script.stat().st_mode & 0o100)
+                self.assertEqual(manager.paths.config_file.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(manager.paths.state_file.stat().st_mode & 0o777, 0o600)
             self.assertEqual(manager.doctor(), [])
             state = manager.state()
             self.assertEqual(

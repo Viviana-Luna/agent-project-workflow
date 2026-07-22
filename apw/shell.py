@@ -67,3 +67,79 @@ def remove_path_profile(profile: Path, dry_run: bool = False) -> str:
         else:
             profile.unlink(missing_ok=True)
     return desired
+
+
+if os.name == "nt":
+    import ctypes
+    import winreg
+
+    _HWND_BROADCAST = 0xFFFF
+    _WM_SETTINGCHANGE = 0x001A
+    _SMTO_ABORTIFHUNG = 0x0002
+    _REG_EXPAND_SZ = winreg.REG_EXPAND_SZ
+
+    def _read_user_path() -> tuple[str, int]:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ) as key:
+            value, value_type = winreg.QueryValueEx(key, "PATH")
+            return str(value), int(value_type)
+
+    def _write_user_path(value: str, value_type: int) -> None:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "PATH", 0, value_type, value)
+        _broadcast_settingchange()
+
+    def _broadcast_settingchange() -> None:
+        result = ctypes.c_ulong(0)
+        ctypes.windll.user32.SendMessageTimeoutW(
+            _HWND_BROADCAST, _WM_SETTINGCHANGE, 0, "Environment",
+            _SMTO_ABORTIFHUNG, 1000, ctypes.byref(result),
+        )
+
+
+def user_path_contains(bin_dir: Path) -> bool:
+    """判断 bin_dir 是否已在用户 PATH 中；Windows 同时检查进程环境与注册表。"""
+    if path_contains(bin_dir):
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        value, _ = _read_user_path()
+    except FileNotFoundError:
+        return False
+    entries = [Path(item).expanduser() for item in value.split(os.pathsep) if item]
+    return any(entry == bin_dir for entry in entries)
+
+
+def add_user_path(bin_dir: Path, dry_run: bool = False) -> bool:
+    """Windows：将 bin_dir 追加到用户 PATH；已存在返回 False。保留 REG_EXPAND_SZ/REG_SZ 类型。"""
+    if os.name != "nt":
+        raise OSError("用户 PATH 注册表管理仅支持 Windows")
+    try:
+        value, value_type = _read_user_path()
+    except FileNotFoundError:
+        value, value_type = "", _REG_EXPAND_SZ
+    entries = [item for item in value.split(os.pathsep) if item]
+    if any(Path(item).expanduser() == bin_dir for item in entries):
+        return False
+    entries.append(str(bin_dir))
+    if not dry_run:
+        _write_user_path(os.pathsep.join(entries), value_type)
+    return True
+
+
+def remove_user_path(bin_dir: Path, dry_run: bool = False) -> bool:
+    """Windows：从用户 PATH 移除 bin_dir；不存在返回 False。"""
+    if os.name != "nt":
+        raise OSError("用户 PATH 注册表管理仅支持 Windows")
+    try:
+        value, value_type = _read_user_path()
+    except FileNotFoundError:
+        return False
+    entries = [item for item in value.split(os.pathsep) if item]
+    remaining = [item for item in entries if Path(item).expanduser() != bin_dir]
+    if len(remaining) == len(entries):
+        return False
+    if not dry_run:
+        _write_user_path(os.pathsep.join(remaining), value_type)
+    return True
+

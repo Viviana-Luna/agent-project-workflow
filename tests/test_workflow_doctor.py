@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -39,7 +40,7 @@ class WorkflowDoctorTests(unittest.TestCase):
         )
         config = root / "config.toml"
         config.write_text(
-            f'version = 1\nvault_root = "{vault}"\nprojects_root = "Myproject"\n\n[projects]\n',
+            f'version = 1\nvault_root = {json.dumps(str(vault))}\nprojects_root = "Myproject"\n\n[projects]\n',
             encoding="utf-8",
         )
         config.chmod(0o600)

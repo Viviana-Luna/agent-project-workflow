@@ -18,6 +18,7 @@ REQUIRED_PATHS = (
     "apw/updater.py",
     "scripts/install.py",
     "scripts/install.sh.template",
+    "scripts/install.ps1.template",
     "scripts/build_release.py",
     "scripts/workflow_doctor.py",
     "adapters/codex/adapter.toml",
@@ -34,6 +35,7 @@ REQUIRED_PATHS = (
 FORBIDDEN_PATTERNS = (
     re.compile(r"/Users/[A-Za-z0-9._-]+/"),
     re.compile(r"/home/[A-Za-z0-9._-]+/"),
+    re.compile(r"\\Users\\[^\\]+\\"),
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
 )
 REQUIRED_ADAPTERS = {"codex", "claude-code", "kimi-code", "opencode"}

@@ -2,6 +2,7 @@ id = "opencode"
 display_name = "OpenCode"
 detect_commands = ["opencode"]
 rule_template = "adapters/codex/AGENTS.md"
+# opencode 在 macOS/Linux/Windows 均使用 ~/.config/opencode 作为配置目录（已核实 1.18.4）。
 rule_target = "~/.config/opencode/AGENTS.md"
 skills_target = "~/.agents/skills"
 validator = []

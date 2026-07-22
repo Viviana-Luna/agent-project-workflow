@@ -9,7 +9,34 @@ permissions:
   contents: write
 
 jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 构建发布资产
+        run: |
+          python scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --output dist
+          python dist/apw.pyz --version
+        shell: bash
+      - name: 全新 HOME Bootstrap 与诊断（Windows）
+        shell: pwsh
+        run: |
+          $smokeHome = Join-Path $env:RUNNER_TEMP "apw-home"
+          $smokeVault = Join-Path $env:RUNNER_TEMP "apw-vault"
+          New-Item -ItemType Directory -Force -Path $smokeVault | Out-Null
+          $env:APW_INSTALL_HOME = $smokeHome
+          $env:APW_BOOTSTRAP_SKIP_WIZARD = "1"
+          $env:APW_PYZ_SOURCE = Join-Path $env:GITHUB_WORKSPACE "dist/apw.pyz"
+          pwsh dist/install.ps1
+          $apw = Join-Path $smokeHome "agent-project-workflow\bin\apw.cmd"
+          & $apw install --clients codex,claude-code,kimi-code,opencode --vault-root $smokeVault --non-interactive --yes
+          & $apw doctor
+
   release:
+    needs: windows-smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -18,12 +45,12 @@ jobs:
           python-version: "3.12"
       - name: 运行发布门禁
         run: |
-          python3 -m unittest discover -s tests -v
-          python3 scripts/validate.py
+          python -m unittest discover -s tests -v
+          python scripts/validate.py
       - name: 构建发布资产
         run: |
-          python3 scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --output dist
-          python3 dist/apw.pyz --version
+          python scripts/build_release.py --version "${GITHUB_REF_NAME#v}" --output dist
+          python dist/apw.pyz --version
       - name: 校验发布资产
         working-directory: dist
         run: sha256sum -c SHA256SUMS
@@ -38,4 +65,4 @@ jobs:
       - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/apw.pyz dist/install.sh dist/release-manifest.json dist/SHA256SUMS --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" dist/apw.pyz dist/install.sh dist/install.ps1 dist/release-manifest.json dist/SHA256SUMS --generate-notes --verify-tag

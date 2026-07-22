@@ -18,6 +18,11 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def sha256_text(text: str) -> str:
+    """对文本按 LF 归一化后计算摘要，避免 CRLF/LF 行尾差异被误判为托管块漂移。"""
+    return sha256_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+
+
 def sha256_path(path: Path) -> str:
     if path.is_symlink():
         return sha256_bytes(f"symlink:{os.readlink(path)}".encode("utf-8"))
@@ -25,8 +30,14 @@ def sha256_path(path: Path) -> str:
         return sha256_bytes(path.read_bytes())
     if path.is_dir():
         digest = hashlib.sha256()
-        for child in sorted(item for item in path.rglob("*") if item.is_file() or item.is_symlink()):
-            relative = child.relative_to(path).as_posix()
+        children = [
+            (child.relative_to(path).as_posix(), child)
+            for child in path.rglob("*")
+            if child.is_file() or child.is_symlink()
+        ]
+        # 按 posix 相对路径字符串排序，与 Bundle._bundle_tree_digest 保持一致；
+        # Windows 上 Path 排序大小写不敏感，会导致 agents 与 SKILL.md 顺序不同。
+        for relative, child in sorted(children, key=lambda item: item[0]):
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
             digest.update(sha256_path(child).encode("ascii"))
@@ -52,7 +63,7 @@ def block_content(text: str) -> str | None:
         end = text.index(MANAGED_END, start)
     except ValueError as exc:
         raise ManagedBlockError("托管区块结束标记位于开始标记之前") from exc
-    return text[start + len(MANAGED_START) : end].strip("\n")
+    return text[start + len(MANAGED_START) : end].strip("\r\n")
 
 
 def merge_block(existing: str, content: str) -> str:

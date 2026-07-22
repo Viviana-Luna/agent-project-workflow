@@ -23,6 +23,7 @@ from .managed import (
     render_block,
     sha256_bytes,
     sha256_path,
+    sha256_text,
     unified_diff,
 )
 from .paths import AppPaths
@@ -311,7 +312,7 @@ class LifecycleManager:
         path = adapter.rule_path(self.paths.home, self.environ)
         template = self.bundle.read_text(adapter.rule_template).strip()
         rendered = render_block(template)
-        desired_digest = sha256_bytes(template.encode("utf-8"))
+        desired_digest = sha256_text(template)
         record = state.installations.get(f"rule:{adapter.id}")
         if not path.exists():
             return Change(
@@ -324,7 +325,7 @@ class LifecycleManager:
                 desired_text=f"{rendered}\n",
             )
         try:
-            existing = path.read_text(encoding="utf-8")
+            existing = path.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             return Change(
                 key=f"rule:{adapter.id}",
@@ -364,7 +365,7 @@ class LifecycleManager:
                 conflict=True,
                 detail=unified_diff(existing, desired_text, path),
             )
-        current_digest = sha256_bytes(current_block.encode("utf-8"))
+        current_digest = sha256_text(current_block)
         desired_text = merge_block(existing, template)
         if current_digest == desired_digest:
             action = "unchanged"
@@ -422,36 +423,32 @@ class LifecycleManager:
         return changes
 
     def _plan_legacy_duplicates(self, selected: list[str], managed_roots: set[Path]) -> list[Change]:
-        kimi_home = self.adapters["kimi-code"].rule_path(self.paths.home, self.environ).parent
-        roots: dict[str, tuple[Path, ...]] = {
-            "codex": (self.paths.home / ".codex" / "skills",),
-            "kimi-code": (kimi_home / "skills",),
-            "opencode": (self.paths.home / ".config" / "opencode" / "skills",),
-            "claude-code": (),
-        }
         changes: list[Change] = []
         seen: set[Path] = set()
         for client_id in selected:
-            for root in roots.get(client_id, ()):
-                if root in managed_roots:
+            if client_id == "claude-code":
+                # claude-code 的托管 Skill 目录即其原生目录，跳过旧版检测避免误伤。
+                continue
+            root = self.adapters[client_id].rule_path(self.paths.home, self.environ).parent / "skills"
+            if root in managed_roots:
+                continue
+            for skill_name in self._skill_names():
+                path = root / skill_name
+                absolute = path.absolute()
+                if absolute in seen or not (path.exists() or path.is_symlink()):
                     continue
-                for skill_name in self._skill_names():
-                    path = root / skill_name
-                    absolute = path.absolute()
-                    if absolute in seen or not (path.exists() or path.is_symlink()):
-                        continue
-                    seen.add(absolute)
-                    changes.append(
-                        Change(
-                            key=f"legacy:{absolute}",
-                            path=path,
-                            kind="legacy-skill",
-                            action="remove",
-                            clients=[client_id],
-                            conflict=True,
-                            detail="发现非托管的同名旧 Skill；移除前必须归档或明确确认直接替换。",
-                        )
+                seen.add(absolute)
+                changes.append(
+                    Change(
+                        key=f"legacy:{absolute}",
+                        path=path,
+                        kind="legacy-skill",
+                        action="remove",
+                        clients=[client_id],
+                        conflict=True,
+                        detail="发现非托管的同名旧 Skill；移除前必须归档或明确确认直接替换。",
                     )
+                )
         return changes
 
     def _plan_removals(
@@ -471,14 +468,14 @@ class LifecycleManager:
                 changes.append(Change(record.key, path, record.kind, "remove", [client_id]))
                 continue
             try:
-                text = path.read_text(encoding="utf-8")
+                text = path.read_bytes().decode("utf-8")
                 current_block = block_content(text)
             except (OSError, UnicodeDecodeError, ManagedBlockError) as exc:
                 changes.append(
                     Change(record.key, path, record.kind, "remove", [client_id], conflict=True, detail=str(exc))
                 )
                 continue
-            digest = sha256_bytes((current_block or "").encode("utf-8"))
+            digest = sha256_text(current_block or "")
             desired_text = remove_block(text) if current_block is not None else ""
             changes.append(
                 Change(
@@ -645,21 +642,16 @@ class LifecycleManager:
         if record.kind != "managed-rule":
             return sha256_path(path)
         try:
-            content = block_content(path.read_text(encoding="utf-8"))
+            content = block_content(path.read_bytes().decode("utf-8"))
         except (OSError, UnicodeDecodeError, ManagedBlockError):
             return ""
-        return sha256_bytes((content or "").encode("utf-8"))
+        return sha256_text(content or "")
 
     def _legacy_duplicate_skills(self, state: InstallState) -> list[Path]:
         managed = {Path(record.path).resolve() for record in state.installations.values() if record.kind == "skill"}
         candidates = []
-        kimi_home = self.adapters["kimi-code"].rule_path(self.paths.home, self.environ).parent
-        for root in (
-            self.paths.home / ".codex" / "skills",
-            kimi_home / "skills",
-            self.paths.home / ".config" / "opencode" / "skills",
-            self.paths.home / ".claude" / "skills",
-        ):
+        for adapter in self.adapters.values():
+            root = adapter.rule_path(self.paths.home, self.environ).parent / "skills"
             for skill_name in self._skill_names():
                 path = root / skill_name
                 if path.exists() and path.resolve() not in managed:
@@ -694,10 +686,15 @@ class LifecycleManager:
         return f"不支持的状态记录类型：{record.kind}"
 
     def _remove_owned_launchers(self) -> None:
-        long_launcher = self.paths.long_launcher
-        if long_launcher.is_symlink() and long_launcher.resolve(strict=False) == self.paths.launcher.resolve(strict=False):
-            long_launcher.unlink()
         launcher = self.paths.launcher
+        long_launcher = self.paths.long_launcher
+        if os.name == "nt":
+            for path in (launcher, long_launcher):
+                if path.is_file() and self._launcher_is_owned(path):
+                    path.unlink(missing_ok=True)
+            return
+        if long_launcher.is_symlink() and long_launcher.resolve(strict=False) == launcher.resolve(strict=False):
+            long_launcher.unlink()
         if not launcher.is_file() or launcher.is_symlink():
             return
         try:
@@ -707,3 +704,11 @@ class LifecycleManager:
             return
         if first_line == "#!/bin/sh" and second_line == LAUNCHER_MARKER:
             launcher.unlink()
+
+    def _launcher_is_owned(self, path: Path) -> bool:
+        """Windows：判断 .cmd 启动器是否由本管理器写入（含标记字符串）。"""
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return False
+        return "agent-project-workflow:launcher" in content

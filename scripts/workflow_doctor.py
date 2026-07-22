@@ -14,7 +14,13 @@ from pathlib import Path
 from typing import Any
 
 
-STANDARD_CONFIG = Path.home() / ".config" / "agent-project-workflow" / "config.toml"
+def standard_config() -> Path:
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        return local / "agent-project-workflow" / "config" / "config.toml"
+    return Path.home() / ".config" / "agent-project-workflow" / "config.toml"
+
+
 LEGACY_CONFIG = Path.home() / ".codex" / "project-workflow.toml"
 STANDARD_DIRS = (
     "constraints",
@@ -70,7 +76,7 @@ def config_candidates(explicit: str | None) -> list[Path]:
         return [Path(explicit).expanduser()]
     from_env = os.environ.get("AGENT_PROJECT_WORKFLOW_CONFIG")
     candidates = [Path(from_env).expanduser()] if from_env else []
-    candidates.extend((STANDARD_CONFIG, LEGACY_CONFIG))
+    candidates.extend((standard_config(), LEGACY_CONFIG))
     return candidates
 
 
@@ -257,12 +263,14 @@ def inspect_workspace(repo_root: Path, workflow_root: Path, config_path: Path) -
         if ABSOLUTE_PATH_RE.search(text):
             add(findings, "warning", "absolute-user-path", "文档包含疑似个人绝对路径", path)
 
-    try:
-        mode = stat.S_IMODE(config_path.stat().st_mode)
-        if mode & 0o077:
-            add(findings, "warning", "config-permissions", f"配置权限为 {mode:04o}，建议限制为 0600", config_path)
-    except OSError:
-        pass
+    if os.name != "nt":
+        # Windows 文件无 POSIX 权限位，配置位于用户私有 LOCALAPPDATA，跳过权限检查。
+        try:
+            mode = stat.S_IMODE(config_path.stat().st_mode)
+            if mode & 0o077:
+                add(findings, "warning", "config-permissions", f"配置权限为 {mode:04o}，建议限制为 0600", config_path)
+        except OSError:
+            pass
     return findings
 
 

@@ -17,6 +17,7 @@ from typing import Callable
 from . import __version__
 from .bundle import Bundle
 from .constants import LATEST_MANIFEST_URL, RELEASE_MANIFEST_SCHEMA_VERSION
+from .junction import create_junction, is_junction, read_junction, remove_junction
 from .lifecycle import Change, LifecycleManager, OperationResult
 from .managed import sha256_bytes
 from .paths import AppPaths
@@ -250,30 +251,72 @@ class UpdateManager:
 
     def _switch_current(self, version_dir: Path) -> None:
         self.paths.data_dir.mkdir(parents=True, exist_ok=True)
+        link = self.paths.current_link
+        if os.name == "nt":
+            self._switch_current_junction(version_dir, link)
+            return
         temp = self.paths.data_dir / ".current.new"
         temp.unlink(missing_ok=True)
         temp.symlink_to(version_dir.relative_to(self.paths.data_dir), target_is_directory=True)
-        os.replace(temp, self.paths.current_link)
+        os.replace(temp, link)
+
+    def _switch_current_junction(self, version_dir: Path, link: Path) -> None:
+        # 联接无法用 os.replace 覆盖已存在的联接，改为两步改名：current->old，new->current。
+        staging = self.paths.data_dir / ".current.new"
+        self._clear_pointer(staging)
+        create_junction(staging, version_dir)
+        previous = self.paths.data_dir / ".current.old"
+        self._clear_pointer(previous)
+        if is_junction(link) or link.exists() or link.is_symlink():
+            os.replace(link, previous)
+        os.replace(staging, link)
+        self._clear_pointer(previous)
+
+    def _clear_pointer(self, path: Path) -> None:
+        if is_junction(path):
+            remove_junction(path)
+        elif path.is_symlink():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            # current 指针只应是联接/符号链接/文件；真实目录是异常状态，拒绝静默删除。
+            raise OSError(f"拒绝删除真实目录（非联接或符号链接）：{path}")
+        elif path.exists():
+            path.unlink(missing_ok=True)
 
     def _current_target(self) -> str | None:
-        if not self.paths.current_link.is_symlink():
+        link = self.paths.current_link
+        if os.name == "nt":
+            if not is_junction(link):
+                return None
+            return str(read_junction(link))
+        if not link.is_symlink():
             return None
-        return os.readlink(self.paths.current_link)
+        return os.readlink(link)
 
     def _restore_current(self, target: str | None) -> None:
+        link = self.paths.current_link
+        if os.name == "nt":
+            self._clear_pointer(link)
+            if target is None:
+                return
+            create_junction(link, Path(target))
+            return
         if target is None:
-            self.paths.current_link.unlink(missing_ok=True)
+            link.unlink(missing_ok=True)
             return
         temp = self.paths.data_dir / ".current.rollback"
         temp.unlink(missing_ok=True)
         temp.symlink_to(target, target_is_directory=True)
-        os.replace(temp, self.paths.current_link)
+        os.replace(temp, link)
 
     def _snapshot(self, paths: list[Path], root: Path) -> list[tuple[Path, Path | None]]:
         snapshots: list[tuple[Path, Path | None]] = []
         for index, path in enumerate(sorted(set(paths), key=str)):
             if not path.exists() and not path.is_symlink():
                 snapshots.append((path, None))
+                continue
+            if is_junction(path):
+                # 联接由 current 指针单独管理，不参与文件快照（正常集合不含联接）。
                 continue
             destination = root / str(index)
             if path.is_dir() and not path.is_symlink():

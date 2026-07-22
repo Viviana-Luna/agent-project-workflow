@@ -16,7 +16,48 @@ class Choice:
 
 
 def terminal_capable(input_stream: TextIO, output_stream: TextIO) -> bool:
-    return input_stream.isatty() and output_stream.isatty() and os.name == "posix"
+    if not (input_stream.isatty() and output_stream.isatty()):
+        return False
+    if os.name == "nt":
+        return _enable_vt_output(output_stream)
+    return True
+
+
+def _enable_vt_output(output_stream: TextIO) -> bool:
+    """Windows：启用控制台虚拟终端处理以支持 ANSI 转义；失败则回退编号菜单。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        std_output_handle = -11
+        enable_virtual_terminal_processing = 0x0004
+        handle = kernel32.GetStdHandle(std_output_handle)
+        mode = wintypes.DWORD()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        if not kernel32.SetConsoleMode(handle, mode.value | enable_virtual_terminal_processing):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _read_key_windows() -> str:
+    """Windows：用 msvcrt 读取单键，映射为方向/确认/选择/退出动作。"""
+    import msvcrt
+
+    ch = msvcrt.getch()
+    if ch in (b"\x00", b"\xe0"):
+        ext = msvcrt.getch().decode("ascii", "ignore")
+        return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(ext, "")
+    if ch == b"\r":
+        return "enter"
+    if ch == b" ":
+        return "space"
+    if ch == b"\x03":
+        raise KeyboardInterrupt
+    return ch.decode("utf-8", "ignore").lower()
 
 
 def select_many(
@@ -31,6 +72,8 @@ def select_many(
         return []
     initial = set(selected or set())
     if terminal_capable(input_stream, output_stream):
+        if os.name == "nt":
+            return _select_many_tty_windows(title, choices, initial, output_stream)
         return _select_many_tty(title, choices, initial, input_stream, output_stream)
     output_stream.write(f"{title}\n")
     for index, choice in enumerate(choices, 1):
@@ -60,6 +103,8 @@ def choose_one(
     if not choices:
         raise ValueError("没有可选项")
     if terminal_capable(input_stream, output_stream):
+        if os.name == "nt":
+            return _choose_one_tty_windows(title, choices, default, output_stream)
         return _choose_one_tty(title, choices, default, input_stream, output_stream)
     output_stream.write(f"{title}\n")
     default_index = 1
@@ -214,5 +259,77 @@ def _choose_one_tty(
             output_stream.write(f"\x1b[{len(choices) + 1}A")
     finally:
         termios.tcsetattr(descriptor, termios.TCSADRAIN, previous)
+        output_stream.write("\x1b[?25h\n")
+        output_stream.flush()
+
+
+def _select_many_tty_windows(
+    title: str,
+    choices: list[Choice],
+    selected: set[str],
+    output_stream: TextIO,
+) -> list[str]:
+    current = 0
+    output_stream.write("\x1b[?25l")
+    try:
+        while True:
+            output_stream.write(f"\r\x1b[2K{title}\r\n")
+            for index, choice in enumerate(choices):
+                cursor = ">" if index == current else " "
+                marker = "x" if choice.value in selected else " "
+                suffix = f" - {choice.description}" if choice.description else ""
+                output_stream.write(f"\x1b[2K {cursor} [{marker}] {choice.label}{suffix}\r\n")
+            output_stream.write("\x1b[2K↑↓ 移动  Space 选择  Enter 继续  Q 退出")
+            output_stream.flush()
+            key = _read_key_windows()
+            if key == "up":
+                current = (current - 1) % len(choices)
+            elif key == "down":
+                current = (current + 1) % len(choices)
+            elif key == "space":
+                value = choices[current].value
+                if value in selected:
+                    selected.remove(value)
+                else:
+                    selected.add(value)
+            elif key == "enter":
+                break
+            elif key == "q":
+                raise KeyboardInterrupt
+            output_stream.write(f"\x1b[{len(choices) + 1}A")
+    finally:
+        output_stream.write("\x1b[?25h\n")
+        output_stream.flush()
+    return [choice.value for choice in choices if choice.value in selected]
+
+
+def _choose_one_tty_windows(
+    title: str,
+    choices: list[Choice],
+    default: str | None,
+    output_stream: TextIO,
+) -> str:
+    current = next((index for index, choice in enumerate(choices) if choice.value == default), 0)
+    output_stream.write("\x1b[?25l")
+    try:
+        while True:
+            output_stream.write(f"\r\x1b[2K{title}\r\n")
+            for index, choice in enumerate(choices):
+                cursor = ">" if index == current else " "
+                suffix = f" - {choice.description}" if choice.description else ""
+                output_stream.write(f"\x1b[2K {cursor} {choice.label}{suffix}\r\n")
+            output_stream.write("\x1b[2K↑↓ 移动  Enter 选择  Q 退出")
+            output_stream.flush()
+            key = _read_key_windows()
+            if key == "up":
+                current = (current - 1) % len(choices)
+            elif key == "down":
+                current = (current + 1) % len(choices)
+            elif key == "enter":
+                return choices[current].value
+            elif key == "q":
+                raise KeyboardInterrupt
+            output_stream.write(f"\x1b[{len(choices) + 1}A")
+    finally:
         output_stream.write("\x1b[?25h\n")
         output_stream.flush()

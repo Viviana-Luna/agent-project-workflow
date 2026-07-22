@@ -1,0 +1,128 @@
+# Agent Project Workflow Bootstrap（Windows）
+# 镜像 install.sh：私有 uv 与 Python、校验 apw.pyz、联接 current 指针、生成 apw.cmd 启动器。
+$ErrorActionPreference = "Stop"
+
+$AppVersion = "@VERSION@"
+$PythonVersion = "@PYTHON_VERSION@"
+$UvVersion = "@UV_VERSION@"
+$ApwSha256 = "@APW_SHA256@"
+$ReleaseBase = "https://github.com/Viviana-Luna/agent-project-workflow/releases/download/v$AppVersion"
+$DryRun = $false
+
+if ($args.Count -ge 1 -and $args[0] -eq "-DryRun") {
+    $DryRun = $true
+} elseif ($args.Count -gt 0) {
+    Write-Error "错误：未知参数：$($args[0])"
+    exit 2
+}
+
+if (-not $env:LOCALAPPDATA) {
+    Write-Error "错误：缺少 LOCALAPPDATA 环境变量"
+    exit 1
+}
+
+# 与 apw.paths.AppPaths 保持一致：覆盖时用 home/agent-project-workflow，否则 LOCALAPPDATA。
+if ($env:APW_INSTALL_HOME) {
+    $ApwHome = $env:APW_INSTALL_HOME
+    $ApwRoot = Join-Path $ApwHome "agent-project-workflow"
+    $HomeArgs = @("--home", $ApwHome)
+} else {
+    $ApwRoot = Join-Path $env:LOCALAPPDATA "agent-project-workflow"
+    $HomeArgs = @()
+}
+$ApwDataDir = Join-Path $ApwRoot "data"
+$ApwStateDir = Join-Path $ApwRoot "state"
+$ApwCacheDir = Join-Path $ApwRoot "cache"
+$ApwBinDir = Join-Path $ApwRoot "bin"
+$ApwRuntimeDir = Join-Path $ApwDataDir "runtime"
+$ApwUvDir = Join-Path $ApwRuntimeDir "uv"
+$ApwPythonDir = Join-Path $ApwRuntimeDir "python"
+$ApwVersionDir = Join-Path $ApwDataDir "versions\$AppVersion"
+$ApwPyz = Join-Path $ApwVersionDir "apw.pyz"
+$ApwLauncher = Join-Path $ApwBinDir "apw.cmd"
+$ApwLongLauncher = Join-Path $ApwBinDir "agent-project-workflow.cmd"
+$CurrentLink = Join-Path $ApwDataDir "current"
+
+if ($DryRun) {
+    Write-Output "计划安装 Agent Project Workflow $AppVersion"
+    Write-Output "管理器目录：$ApwRoot"
+    Write-Output "私有 Python：$PythonVersion"
+    Write-Output "私有 uv：$UvVersion"
+    exit 0
+}
+
+if (Test-Path $ApwLauncher) {
+    $existing = Get-Content $ApwLauncher -Raw -ErrorAction SilentlyContinue
+    if ($existing -notmatch "agent-project-workflow:launcher") {
+        Write-Error "错误：启动器路径已被其他程序占用：$ApwLauncher"
+        exit 1
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $ApwUvDir, $ApwPythonDir, $ApwVersionDir, $ApwStateDir, $ApwCacheDir, $ApwBinDir | Out-Null
+
+$UvInstaller = Join-Path $env:TEMP "apw-uv-installer.ps1"
+Invoke-WebRequest -Uri "https://astral.sh/uv/install.ps1" -OutFile $UvInstaller -UseBasicParsing
+$env:UV_UNMANAGED_INSTALL = $ApwUvDir
+$env:UV_NO_MODIFY_PATH = "1"
+& powershell -ExecutionPolicy Bypass -File $UvInstaller
+$UvBin = Join-Path $ApwUvDir "uv.exe"
+if (-not (Test-Path $UvBin)) {
+    Write-Error "错误：私有 uv 安装失败"
+    exit 1
+}
+
+$env:UV_PYTHON_INSTALL_DIR = $ApwPythonDir
+$env:UV_CACHE_DIR = Join-Path $ApwCacheDir "uv"
+$env:UV_NO_CONFIG = "1"
+& $UvBin python install $PythonVersion --install-dir $ApwPythonDir --no-bin
+$PythonBin = & $UvBin python find --managed-python $PythonVersion
+if (-not (Test-Path $PythonBin)) {
+    Write-Error "错误：私有 Python 安装失败"
+    exit 1
+}
+
+$TempPyz = Join-Path $env:TEMP "apw-bootstrap.pyz"
+if ($env:APW_PYZ_SOURCE) {
+    Copy-Item $env:APW_PYZ_SOURCE $TempPyz -Force
+} else {
+    Invoke-WebRequest -Uri "$ReleaseBase/apw.pyz" -OutFile $TempPyz -UseBasicParsing
+}
+$ActualHash = (Get-FileHash -Algorithm SHA256 $TempPyz).Hash.ToLower()
+if ($ActualHash -ne $ApwSha256.ToLower()) {
+    Write-Error "错误：apw.pyz SHA-256 校验失败"
+    exit 1
+}
+Copy-Item $TempPyz $ApwPyz -Force
+
+# 用 Get-Item -Force 判断存在性（Test-Path 会跟随联接，悬空联接返回 False 误判为不存在）。
+$existingLink = Get-Item $CurrentLink -Force -ErrorAction SilentlyContinue
+if ($existingLink) {
+    # 只删除联接本身；Remove-Item -Recurse 在 Windows PowerShell 5.1 下会穿透联接删除目标内容。
+    [System.IO.Directory]::Delete($CurrentLink)
+}
+New-Item -ItemType Junction -Path $CurrentLink -Target $ApwVersionDir | Out-Null
+
+$UvCacheDir = Join-Path $ApwCacheDir "uv"
+$HomeLine = if ($HomeArgs.Count -gt 0) { ($HomeArgs -join " ") } else { "" }
+$launcherContent = @"
+@echo off
+chcp 65001 >nul
+REM agent-project-workflow:launcher
+set "UV_PYTHON_INSTALL_DIR=$ApwPythonDir"
+set "UV_CACHE_DIR=$UvCacheDir"
+set "UV_NO_CONFIG=1"
+set "APW_RUNTIME_PYTHON=$PythonBin"
+set "APW_RUNTIME_PYTHON_VERSION=$PythonVersion"
+set "APW_RUNTIME_UV=$UvVersion"
+"$PythonBin" "$ApwDataDir\current\apw.pyz" $HomeLine %*
+"@
+[System.IO.File]::WriteAllText($ApwLauncher, $launcherContent, [System.Text.UTF8Encoding]::new($false))
+Copy-Item $ApwLauncher $ApwLongLauncher -Force
+
+Write-Output "已安装 Agent Project Workflow $AppVersion。"
+if ($env:APW_BOOTSTRAP_SKIP_WIZARD -eq "1") {
+    Write-Output "已跳过交互向导，请运行：$ApwLauncher install"
+} else {
+    & $ApwLauncher install
+}

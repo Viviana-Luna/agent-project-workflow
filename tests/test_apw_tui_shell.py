@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +51,7 @@ class TuiAndShellTests(unittest.TestCase):
         )
         self.assertEqual(selected, "status")
 
+    @unittest.skipUnless(os.name == "posix", "TTY 原始模式依赖 termios")
     def test_tty_multi_select_uses_carriage_return_and_correct_redraw_height(self) -> None:
         input_stream = TtyBuffer("\x1b[B\r")
         output_stream = TtyBuffer()
@@ -71,6 +73,7 @@ class TuiAndShellTests(unittest.TestCase):
         self.assertIn("Codex\r\n", rendered)
         self.assertIn("\x1b[3A", rendered)
 
+    @unittest.skipUnless(os.name == "posix", "TTY 原始模式依赖 termios")
     def test_tty_single_select_redraws_without_diagonal_drift(self) -> None:
         input_stream = TtyBuffer("\x1b[B\r")
         output_stream = TtyBuffer()
@@ -91,6 +94,45 @@ class TuiAndShellTests(unittest.TestCase):
         self.assertIn("选择操作\r\n", rendered)
         self.assertIn("安装\r\n", rendered)
         self.assertIn("\x1b[3A", rendered)
+
+    @unittest.skipUnless(os.name == "nt", "Windows TTY 虚拟终端")
+    def test_windows_tty_single_select_arrow(self) -> None:
+        output = TtyBuffer()
+        keys = iter([b"\xe0", b"P", b"\r"])  # 下移、回车
+        with (
+            mock.patch("apw.tui._enable_vt_output", return_value=True),
+            mock.patch("msvcrt.getch", side_effect=lambda: next(keys)),
+        ):
+            selected = choose_one(
+                "选择操作",
+                [Choice("install", "安装"), Choice("status", "状态")],
+                "install",
+                input_stream=TtyBuffer(""),
+                output_stream=output,
+            )
+        rendered = output.getvalue()
+        self.assertEqual(selected, "status")
+        self.assertIn("选择操作\r\n", rendered)
+        self.assertIn("安装\r\n", rendered)
+        self.assertIn("\x1b[3A", rendered)
+
+    @unittest.skipUnless(os.name == "nt", "Windows TTY 虚拟终端")
+    def test_windows_tty_multi_select(self) -> None:
+        output = TtyBuffer()
+        keys = iter([b"\xe0", b"P", b" ", b"\r"])  # 下移、空格、回车
+        with (
+            mock.patch("apw.tui._enable_vt_output", return_value=True),
+            mock.patch("msvcrt.getch", side_effect=lambda: next(keys)),
+        ):
+            selected = select_many(
+                "选择客户端",
+                [Choice("codex", "Codex"), Choice("claude", "Claude Code")],
+                {"codex"},
+                input_stream=TtyBuffer(""),
+                output_stream=output,
+            )
+        self.assertEqual(selected, ["codex", "claude"])
+        self.assertIn("\x1b[3A", output.getvalue())
 
     def test_path_managed_block_preserves_other_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

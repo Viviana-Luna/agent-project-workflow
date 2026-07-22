@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -30,7 +31,7 @@ class InitWorkflowTests(unittest.TestCase):
             readme.write_text("# 已有说明\n", encoding="utf-8")
             config = root / "config.toml"
             config.write_text(
-                f'version = 1\nvault_root = "{vault}"\nprojects_root = "Myproject"\n\n[projects]\n',
+                f'version = 1\nvault_root = {json.dumps(str(vault))}\nprojects_root = "Myproject"\n\n[projects]\n',
                 encoding="utf-8",
             )
 
@@ -65,8 +66,8 @@ class InitWorkflowTests(unittest.TestCase):
             repo.mkdir()
             config = root / "config.toml"
             config.write_text(
-                f'version = 1\nvault_root = "{root / "vault"}"\nprojects_root = "Myproject"\n\n'
-                f'[projects]\n"{repo}" = "Special/project"\n',
+                f'version = 1\nvault_root = {json.dumps(str(root / "vault"))}\nprojects_root = "Myproject"\n\n'
+                f'[projects]\n{json.dumps(str(repo))} = "Special/project"\n',
                 encoding="utf-8",
             )
             result = self.run_script(
@@ -86,7 +87,7 @@ class InitWorkflowTests(unittest.TestCase):
             repo.mkdir()
             config = root / "config.toml"
             config.write_text(
-                f'version = 1\nvault_root = "{root / "vault"}"\nprojects_root = "../outside"\n',
+                f'version = 1\nvault_root = {json.dumps(str(root / "vault"))}\nprojects_root = "../outside"\n',
                 encoding="utf-8",
             )
             result = self.run_script(

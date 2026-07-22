@@ -14,7 +14,15 @@ MANAGED_START = "<!-- agent-dev-workflow-init:start -->"
 MANAGED_END = "<!-- agent-dev-workflow-init:end -->"
 LEGACY_MANAGED_START = "<!-- project-doc-structure:start -->"
 LEGACY_MANAGED_END = "<!-- project-doc-structure:end -->"
-STANDARD_CONFIG = Path.home() / ".config" / "agent-project-workflow" / "config.toml"
+
+
+def standard_config() -> Path:
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        return local / "agent-project-workflow" / "config" / "config.toml"
+    return Path.home() / ".config" / "agent-project-workflow" / "config.toml"
+
+
 LEGACY_CONFIG = Path.home() / ".codex" / "project-workflow.toml"
 
 
@@ -22,11 +30,12 @@ def default_config() -> Path:
     from_env = os.environ.get("AGENT_PROJECT_WORKFLOW_CONFIG")
     if from_env:
         return Path(from_env).expanduser()
-    if STANDARD_CONFIG.is_file():
-        return STANDARD_CONFIG
+    standard = standard_config()
+    if standard.is_file():
+        return standard
     if LEGACY_CONFIG.is_file():
         return LEGACY_CONFIG
-    return STANDARD_CONFIG
+    return standard
 
 
 def parse_args() -> argparse.Namespace:

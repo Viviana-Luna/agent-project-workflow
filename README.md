@@ -26,7 +26,7 @@ tests/        标准库自动化测试
 
 ## 支持范围
 
-- 操作系统：macOS、Linux。
+- 操作系统：macOS、Linux、Windows。
 - 客户端：Codex、Claude Code、Kimi Code、OpenCode。
 - 运行时：工具私有 CPython 3.12，不修改系统 Python。
 - 更新策略：只在用户明确检查或安装更新时联网，不自动更新。
@@ -37,8 +37,16 @@ tests/        标准库自动化测试
 
 正式 Release 发布后运行：
 
+macOS / Linux：
+
 ```bash
 curl -fsSL https://github.com/Viviana-Luna/agent-project-workflow/releases/latest/download/install.sh | sh
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://github.com/Viviana-Luna/agent-project-workflow/releases/latest/download/install.ps1 | iex
 ```
 
 Bootstrap 会安装到用户目录并启动交互向导。向导依次选择 Obsidian Vault、项目根目录和需要接入的客户端；发现已有规则或同名 Skill 时先展示差异，再允许压缩归档后替换或明确确认的无备份直接替换。
@@ -105,8 +113,10 @@ python3 scripts/workflow_doctor.py --repo-root .
 工具依次查找：
 
 1. `AGENT_PROJECT_WORKFLOW_CONFIG` 环境变量指定的文件。
-2. `~/.config/agent-project-workflow/config.toml`。
+2. macOS/Linux：`~/.config/agent-project-workflow/config.toml`；Windows：`%LOCALAPPDATA%\agent-project-workflow\config\config.toml`。
 3. 兼容旧安装的 `~/.codex/project-workflow.toml`。
+
+Windows 上管理器目录位于 `%LOCALAPPDATA%\agent-project-workflow\`，`current` 版本指针用目录联接（junction）而非符号链接，PATH 写入用户环境变量（注册表）。
 
 默认项目目录是 `<vault_root>/Myproject/<仓库名>`；只有仓库重名或目录特殊时才需要 `[projects]` 显式映射。
 

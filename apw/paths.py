@@ -21,23 +21,36 @@ class AppPaths:
     @classmethod
     def from_home(cls, home: Path | None = None) -> "AppPaths":
         resolved = (home or Path.home()).expanduser().resolve()
-        if home is not None:
-            config_home = resolved / ".config"
-            data_home = resolved / ".local" / "share"
-            state_home = resolved / ".local" / "state"
-            cache_home = resolved / ".cache"
+        if os.name == "nt":
+            if home is not None:
+                root = resolved / APP_NAME
+            else:
+                local = Path(os.environ.get("LOCALAPPDATA") or resolved / "AppData" / "Local")
+                root = local / APP_NAME
+            config_dir = root / "config"
+            data_dir = root / "data"
+            state_dir = root / "state"
+            cache_dir = root / "cache"
+            bin_dir = root / "bin"
+        elif home is not None:
+            config_dir = resolved / ".config" / APP_NAME
+            data_dir = resolved / ".local" / "share" / APP_NAME
+            state_dir = resolved / ".local" / "state" / APP_NAME
+            cache_dir = resolved / ".cache" / APP_NAME
+            bin_dir = resolved / ".local" / "bin"
         else:
-            config_home = Path(os.environ.get("XDG_CONFIG_HOME", resolved / ".config")).expanduser()
-            data_home = Path(os.environ.get("XDG_DATA_HOME", resolved / ".local" / "share")).expanduser()
-            state_home = Path(os.environ.get("XDG_STATE_HOME", resolved / ".local" / "state")).expanduser()
-            cache_home = Path(os.environ.get("XDG_CACHE_HOME", resolved / ".cache")).expanduser()
+            config_dir = Path(os.environ.get("XDG_CONFIG_HOME", resolved / ".config")).expanduser() / APP_NAME
+            data_dir = Path(os.environ.get("XDG_DATA_HOME", resolved / ".local" / "share")).expanduser() / APP_NAME
+            state_dir = Path(os.environ.get("XDG_STATE_HOME", resolved / ".local" / "state")).expanduser() / APP_NAME
+            cache_dir = Path(os.environ.get("XDG_CACHE_HOME", resolved / ".cache")).expanduser() / APP_NAME
+            bin_dir = resolved / ".local" / "bin"
         return cls(
             home=resolved,
-            config_dir=config_home / APP_NAME,
-            data_dir=data_home / APP_NAME,
-            state_dir=state_home / APP_NAME,
-            cache_dir=cache_home / APP_NAME,
-            bin_dir=resolved / ".local" / "bin",
+            config_dir=config_dir,
+            data_dir=data_dir,
+            state_dir=state_dir,
+            cache_dir=cache_dir,
+            bin_dir=bin_dir,
         )
 
     @property
@@ -70,8 +83,8 @@ class AppPaths:
 
     @property
     def launcher(self) -> Path:
-        return self.bin_dir / "apw"
+        return self.bin_dir / ("apw.cmd" if os.name == "nt" else "apw")
 
     @property
     def long_launcher(self) -> Path:
-        return self.bin_dir / APP_NAME
+        return self.bin_dir / (f"{APP_NAME}.cmd" if os.name == "nt" else APP_NAME)
