@@ -17,6 +17,7 @@ class PrepareMigrationTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--repo-root", str(repo), "--output-root", str(output), *extra],
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )

@@ -7,6 +7,7 @@ import argparse
 import filecmp
 import os
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,7 +77,15 @@ def backup_target(target: Path, home: Path, backup_stamp: str) -> Path:
     return backup
 
 
+def _utf8_stdio() -> None:
+    """Windows 重定向输出默认使用 ANSI 代码页，强制 UTF-8 避免中文输出崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    _utf8_stdio()
     args = parse_args()
     repo_root = Path(__file__).resolve().parent.parent
     home = Path(args.home).expanduser().resolve() if args.home else Path.home()

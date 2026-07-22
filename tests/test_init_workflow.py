@@ -17,6 +17,7 @@ class InitWorkflowTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )

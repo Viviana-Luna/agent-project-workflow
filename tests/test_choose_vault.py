@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -27,6 +28,8 @@ class ChooseVaultTests(unittest.TestCase):
                 mock.patch("apw.cli.choose_one", return_value="dialog"),
                 mock.patch("apw.cli.pick_directory", return_value=None),
                 mock.patch("apw.cli.prompt", return_value=str(vault)),
+                # choose_vault 回退时会打印中文提示，隔离宿主控制台编码（CI 为 cp1252）。
+                mock.patch("sys.stdout", io.StringIO()),
             ):
                 self.assertEqual(cli.choose_vault(Path(temp)), vault)
 

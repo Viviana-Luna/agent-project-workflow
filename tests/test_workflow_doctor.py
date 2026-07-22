@@ -50,6 +50,7 @@ class WorkflowDoctorTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--repo-root", str(repo), "--config", str(config)],
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )

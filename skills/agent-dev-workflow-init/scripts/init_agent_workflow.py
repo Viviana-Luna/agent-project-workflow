@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -380,7 +381,15 @@ def report_legacy(repo_root: Path, actions: list[str]) -> None:
         )
 
 
+def _utf8_stdio() -> None:
+    """Windows 重定向输出默认使用 ANSI 代码页，强制 UTF-8 避免中文输出崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    _utf8_stdio()
     args = parse_args()
     repo_root = Path(args.repo_root).expanduser().resolve()
     if not repo_root.is_dir():

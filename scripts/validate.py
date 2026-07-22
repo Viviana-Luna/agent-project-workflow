@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import tomllib
 from pathlib import Path
 
@@ -88,7 +89,15 @@ def validate_adapters(root: Path) -> list[str]:
     return errors
 
 
+def _utf8_stdio() -> None:
+    """Windows 重定向输出默认使用 ANSI 代码页，强制 UTF-8 避免中文输出崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    _utf8_stdio()
     root = Path(__file__).resolve().parent.parent
     errors: list[str] = []
     for relative in REQUIRED_PATHS:

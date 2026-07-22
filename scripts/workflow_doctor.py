@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -274,7 +275,15 @@ def inspect_workspace(repo_root: Path, workflow_root: Path, config_path: Path) -
     return findings
 
 
+def _utf8_stdio() -> None:
+    """Windows 重定向输出默认使用 ANSI 代码页，强制 UTF-8 避免中文输出崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    _utf8_stdio()
     args = parse_args()
     repo_root = Path(args.repo_root).expanduser().resolve()
     if not repo_root.is_dir():

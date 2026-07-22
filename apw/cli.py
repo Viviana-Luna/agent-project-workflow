@@ -83,7 +83,15 @@ def add_write_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--yes", action="store_true", help="确认执行已预览的非冲突操作")
 
 
+def _utf8_stdio() -> None:
+    """Windows 重定向输出默认使用 ANSI 代码页，强制 UTF-8 避免中文输出崩溃。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     paths = AppPaths.from_home(Path(args.home) if args.home else None)
