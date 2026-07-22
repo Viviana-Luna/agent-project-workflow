@@ -64,7 +64,8 @@ def build_installer(output: Path, version: str, pyz_sha256: str) -> Path:
         .replace("@APW_SHA256@", pyz_sha256)
     )
     target = output / "install.sh"
-    target.write_text(rendered, encoding="utf-8")
+    # 固定 LF：CRLF 的 shell 脚本无法被 sh 执行。
+    target.write_text(rendered, encoding="utf-8", newline="\n")
     target.chmod(0o755)
     return target
 
@@ -119,7 +120,8 @@ def main() -> int:
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assets = (pyz, installer, installer_windows, manifest_path)
     sums = "".join(f"{sha256(path)}  {path.name}\n" for path in assets)
-    (output / "SHA256SUMS").write_text(sums, encoding="utf-8")
+    # 固定 LF：CRLF 会让 sha256sum -c 把 \r 计入文件名，校验全部失败。
+    (output / "SHA256SUMS").write_text(sums, encoding="utf-8", newline="\n")
     print(f"构建完成：{output}")
     return 0
 
