@@ -58,6 +58,8 @@ class UpdaterTests(unittest.TestCase):
         self.assertIn("UV_NO_CONFIG=1", installer)
         self.assertIn("# agent-project-workflow:launcher", installer)
         self.assertIn("启动器路径已被其他程序占用", installer)
+        self.assertIn("os.replace(sys.argv[1], sys.argv[2])", installer)
+        self.assertNotIn('mv -f "$CURRENT_NEW"', installer)
 
     def test_windows_bootstrap_keeps_uv_python_and_cache_private(self) -> None:
         installer = (ROOT / "scripts" / "install.ps1.template").read_text(encoding="utf-8")

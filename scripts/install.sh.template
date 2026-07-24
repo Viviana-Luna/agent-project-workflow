@@ -115,7 +115,8 @@ mv "$APW_TEMP_DIR/apw.pyz" "$APW_PYZ"
 
 rm -f "$CURRENT_NEW"
 ln -s "versions/$APP_VERSION" "$CURRENT_NEW"
-mv -f "$CURRENT_NEW" "$APW_DATA_DIR/current"
+"$PYTHON_BIN" -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' \
+  "$CURRENT_NEW" "$APW_DATA_DIR/current"
 
 {
   printf '#!/bin/sh\n'
