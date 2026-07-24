@@ -11,7 +11,6 @@ from typing import Iterable
 
 from . import __version__
 from .constants import DIRECT_REPLACE_PHRASE, LATEST_MANIFEST_URL, REPOSITORY_URL
-from .dialog import pick_directory
 from .lifecycle import Change, LifecycleError, LifecycleManager, OperationResult
 from .paths import AppPaths
 from .shell import (
@@ -33,10 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--home", default=None, help="覆盖用户主目录，主要用于隔离测试")
     subparsers = parser.add_subparsers(dest="command")
 
-    install = subparsers.add_parser("install", help="安装或接入客户端")
-    install.add_argument("--clients", default=None, help="逗号分隔的客户端 ID")
-    install.add_argument("--vault-root", default=None, help="Obsidian Vault 路径")
-    install.add_argument("--projects-root", default="Myproject", help="Vault 中的项目根目录名")
+    install = subparsers.add_parser("install", help="安装一个工作流内容")
+    install.add_argument("--skills", action="store_true", help="只安装共享工作流 Skill（Codex、Kimi Code、OpenCode）")
+    install.add_argument("--rule", choices=("codex", "claude-code", "kimi-code", "opencode"), help="只安装一个客户端规则")
+    install.add_argument("--clients", default=None, help="兼容旧版：逗号分隔的客户端 ID")
     add_write_options(install)
 
     clients = subparsers.add_parser("clients", help="调整已接入客户端")
@@ -125,28 +124,76 @@ def main(argv: list[str] | None = None) -> int:
 
 def command_install(args: argparse.Namespace, paths: AppPaths, manager: LifecycleManager) -> int:
     interactive = not args.non_interactive
-    clients = parse_clients(args.clients) if args.clients else choose_clients(manager, interactive)
-    vault_root = Path(args.vault_root).expanduser() if args.vault_root else None
-    if not paths.config_file.is_file() and not paths.legacy_config_file.is_file() and vault_root is None:
-        if not interactive:
-            raise LifecycleError("非交互首次安装必须指定 --vault-root")
-        vault_root = choose_vault(paths.home)
-    _, changes = manager.plan_install(clients)
-    print("\n安装预览：")
+    modes = sum(bool(value) for value in (args.skills, args.rule, args.clients))
+    if modes > 1:
+        raise LifecycleError("--skills、--rule 和 --clients 只能指定一个")
+    mode = "clients"
+    client_id: str | None = None
+    skill_names: list[str] | None = None
+    if args.skills:
+        mode = "skills"
+    elif args.rule:
+        mode = "rule"
+        client_id = args.rule
+    elif args.clients:
+        clients = parse_clients(args.clients)
+    elif interactive:
+        show_client_detection(manager)
+        mode = choose_install_content()
+        if mode == "exit":
+            print("已取消，未写入任何文件。")
+            return 0
+        if mode == "rule":
+            client_id = choose_detected_client(manager)
+    else:
+        raise LifecycleError("非交互模式必须指定 --skills、--rule 或兼容的 --clients")
+    if mode == "skills":
+        _, all_skill_changes = manager.plan_install_skills()
+        if interactive:
+            skill_names = choose_skills(all_skill_changes)
+            if not skill_names:
+                print("未选择任何工作流 Skill，未写入任何文件。")
+                return 0
+        _, changes = manager.plan_install_skills(skill_names)
+        title = "共享工作流 Skill"
+    elif mode == "rule":
+        assert client_id is not None
+        _, changes = manager.plan_install_rule(client_id)
+        title = f"{manager.adapters[client_id].display_name} 规则"
+    else:
+        _, changes = manager.plan_install(clients)
+        title = "兼容批量客户端接入"
+    print(f"\n{title}安装预览：")
     print(manager.format_changes(changes))
     policy, direct = resolve_conflicts(args, changes, interactive)
-    if not args.dry_run and not args.yes and interactive and not confirm("确认执行安装？"):
+    if not args.dry_run and not args.yes and interactive and not confirm(f"确认安装{title}？"):
         print("已取消，未写入任何文件。")
         return 0
-    result = manager.install(
-        clients,
-        conflict_policy=policy,
-        confirmed_direct_replace=direct,
-        dry_run=args.dry_run,
-        vault_root=vault_root,
-        projects_root=args.projects_root,
-    )
+    if mode == "skills":
+        result = manager.install_skills(
+            skill_names=skill_names,
+            conflict_policy=policy,
+            confirmed_direct_replace=direct,
+            dry_run=args.dry_run,
+        )
+    elif mode == "rule":
+        assert client_id is not None
+        result = manager.install_rule(
+            client_id,
+            conflict_policy=policy,
+            confirmed_direct_replace=direct,
+            dry_run=args.dry_run,
+        )
+    else:
+        result = manager.install(
+            clients,
+            conflict_policy=policy,
+            confirmed_direct_replace=direct,
+            dry_run=args.dry_run,
+        )
     print_result(result)
+    if interactive and mode == "skills" and not args.dry_run:
+        install_follow_up_rule(args, manager)
     if not args.dry_run:
         maybe_configure_path(paths, interactive)
         print("安装完成。管理器不会安装或登录智能体客户端。")
@@ -190,7 +237,9 @@ def command_status(args: argparse.Namespace, manager: LifecycleManager) -> int:
         print(f"管理器版本：{status['manager_version']}")
         clients = status["selected_clients"]
         print(f"已接入客户端：{', '.join(clients) if clients else '无'}")
-        print(f"配置：{status['config']}")
+        print(f"共享工作流 Skill：{'已安装' if status['shared_skills_installed'] else '未安装'}")
+        config = status["config"]
+        print(f"项目工作区配置：{config if config else '尚未创建，将在首次项目初始化时选择'}")
         print(f"状态：{status['state']}")
         print(f"诊断：{status['errors']} 个错误，{status['warnings']} 个警告")
     return 1 if status["errors"] else 0
@@ -223,8 +272,7 @@ def command_doctor(args: argparse.Namespace, manager: LifecycleManager) -> int:
 
 def command_repair(args: argparse.Namespace, manager: LifecycleManager) -> int:
     interactive = not args.non_interactive
-    state = manager.assert_safe_state()
-    _, changes = manager.plan_install(state.selected_clients)
+    _, changes = manager.plan_repair()
     print("\n修复预览：")
     print(manager.format_changes(changes))
     policy, direct = resolve_conflicts(args, changes, interactive)
@@ -290,7 +338,8 @@ def _remove_path(paths: AppPaths) -> None:
 
 
 def command_update(args: argparse.Namespace, paths: AppPaths, manager: LifecycleManager) -> int:
-    if not manager.assert_safe_state().selected_clients:
+    state = manager.assert_safe_state()
+    if not state.installations:
         raise LifecycleError("尚未完成首次安装，无法更新")
     target_version = args.target_version.removeprefix("v") if args.target_version else None
     if target_version:
@@ -357,10 +406,9 @@ def command_update(args: argparse.Namespace, paths: AppPaths, manager: Lifecycle
 
 
 def run_menu(paths: AppPaths, manager: LifecycleManager) -> int:
-    state = manager.state()
     choices = [
-        Choice("install", "安装或接入客户端"),
-        Choice("clients", "修改客户端选择"),
+        Choice("install", "安装一个工作流内容"),
+        Choice("clients", "批量调整客户端（兼容入口）"),
         Choice("status", "查看状态"),
         Choice("update", "手动检查更新"),
         Choice("doctor", "运行诊断"),
@@ -368,7 +416,7 @@ def run_menu(paths: AppPaths, manager: LifecycleManager) -> int:
         Choice("uninstall", "卸载"),
         Choice("exit", "退出"),
     ]
-    default = "clients" if state.selected_clients else "install"
+    default = "install"
     action = choose_one(f"Agent Project Workflow {__version__}", choices, default)
     if action == "exit":
         return 0
@@ -405,27 +453,94 @@ def choose_clients(
     return result
 
 
-def choose_vault(home: Path) -> Path:
-    selected = choose_one(
-        "请选择 Obsidian Vault",
+def show_client_detection(manager: LifecycleManager) -> None:
+    print("\n支持的客户端检测结果：")
+    for adapter in manager.available_clients():
+        status = "已检测到" if adapter.detected() else "未检测到"
+        print(f"- {adapter.display_name}：{status}")
+
+
+def choose_install_content() -> str:
+    return choose_one(
+        "请选择本次要安装的内容（每次只处理一个内容）",
         [
-            Choice("dialog", "弹窗选择文件夹", "打开系统文件夹选择对话框"),
-            Choice("manual", "手动输入路径", "直接粘贴或输入 Vault 绝对路径"),
+            Choice("skills", "共享工作流 Skill", "安装到 ~/.agents/skills；供 Codex、Kimi Code、OpenCode 发现"),
+            Choice("rule", "客户端规则文件", "安装一个 AGENTS.md；Claude Code 使用 CLAUDE.md"),
+            Choice("exit", "暂不安装", "只完成客户端检测，不写入文件"),
         ],
-        "dialog",
+        "exit",
     )
-    if selected == "dialog":
-        path = pick_directory("选择 Obsidian Vault 文件夹", initial_dir=str(home))
-        if path is not None:
-            if not path.is_dir():
-                raise LifecycleError(f"Obsidian Vault 不存在：{path}")
-            return path
-        print("弹窗不可用或已取消，改为手动输入。")
-    value = prompt("请输入 Obsidian Vault 路径")
-    path = Path(value).expanduser()
-    if not path.is_dir():
-        raise LifecycleError(f"Obsidian Vault 不存在：{path}")
-    return path
+
+
+def choose_detected_client(manager: LifecycleManager) -> str:
+    choices = [
+        Choice(adapter.id, adapter.display_name)
+        for adapter in manager.available_clients()
+        if adapter.detected()
+    ]
+    if not choices:
+        raise LifecycleError("没有检测到受支持客户端；请先安装客户端程序后再安装规则")
+    return choose_one("请选择要安装规则的客户端", choices)
+
+
+def choose_follow_up_rule(manager: LifecycleManager) -> str | None:
+    choices = [
+        Choice(adapter.id, adapter.display_name)
+        for adapter in manager.available_clients()
+        if adapter.detected()
+    ]
+    if not choices:
+        print("没有检测到客户端，已跳过规则安装。")
+        return None
+    choices.append(Choice("skip", "暂不安装客户端规则", "仅完成本次 Skill 安装"))
+    selected = choose_one("接下来请选择要安装的客户端规则", choices, "skip")
+    return None if selected == "skip" else selected
+
+
+def install_follow_up_rule(args: argparse.Namespace, manager: LifecycleManager) -> None:
+    client_id = choose_follow_up_rule(manager)
+    if client_id is None:
+        print("已跳过客户端规则安装。")
+        return
+    _, changes = manager.plan_install_rule(client_id)
+    title = f"{manager.adapters[client_id].display_name} 规则"
+    print(f"\n{title}安装预览：")
+    print(manager.format_changes(changes))
+    policy, direct = resolve_conflicts(args, changes, True)
+    if not args.yes and not confirm(f"确认安装{title}？"):
+        print("已取消客户端规则安装，已保留本次 Skill 安装结果。")
+        return
+    result = manager.install_rule(
+        client_id,
+        conflict_policy=policy,
+        confirmed_direct_replace=direct,
+    )
+    print_result(result)
+
+
+def choose_skills(changes: Iterable[Change]) -> list[str]:
+    status = {
+        "missing": "未安装",
+        "current": "已是当前版本",
+        "different": "版本有差异",
+        "unreadable": "无法比较版本",
+        "unmanaged": "未托管内容",
+    }
+    items = list(changes)
+    choices = [
+        Choice(
+            change.bundle_prefix.rsplit("/", 1)[-1] if change.bundle_prefix else change.key,
+            change.bundle_prefix.rsplit("/", 1)[-1] if change.bundle_prefix else change.key,
+            status.get(change.version_status, change.action),
+        )
+        for change in items
+    ]
+    defaults = {
+        choice.value
+        for choice, change in zip(choices, items, strict=True)
+        if change.version_status in {"missing", "different"}
+    }
+    return select_many("请选择要安装的工作流 Skill", choices, defaults)
 
 
 def resolve_conflicts(

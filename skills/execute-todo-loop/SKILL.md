@@ -11,9 +11,9 @@ description: 从 Obsidian 项目工作区的 TODO 与计划文档中选择一个
 
 1. 读取并遵守用户级和仓库级 `AGENTS.md`、`CLAUDE.md`、开发约束与 Git 规则。
 2. 确定仓库根目录；不是 Git 仓库时使用当前工作目录。
-3. 读取 `AGENT_PROJECT_WORKFLOW_CONFIG` 指定的配置；未设置时依次尝试 `~/.config/agent-project-workflow/config.toml` 和兼容旧安装的 `~/.codex/project-workflow.toml`。优先使用 `[projects]` 中与仓库绝对路径完全匹配的相对目录；没有映射时使用 `<projects_root>/<仓库名>`，`projects_root` 缺失则按 `Myproject` 处理。
-4. 将 `<vault_root>/<解析后的相对目录>/` 作为唯一项目工作区，读取其中的 `TODO.md`、相关 `planning/`、`constraints/` 和 `explanations/`。
-5. 配置缺失、路径不可用或映射有歧义时停止并说明；不得回退到仓库创建 `.agent/`，也不得使用仓库中的旧 `.agent/` 作为当前事实源。
+3. 读取 `AGENT_PROJECT_WORKFLOW_CONFIG` 指定的配置；未设置时依次尝试 `~/.config/agent-project-workflow/config.toml` 和兼容旧安装的 `~/.codex/project-workflow.toml`。
+4. 使用 `[projects]` 中与仓库绝对路径完全匹配的 Vault 内相对目录，将 `<vault_root>/<项目映射>/` 作为唯一项目工作区，读取其中的 `TODO.md`、相关 `planning/`、`constraints/` 和 `explanations/`。
+5. 配置缺失、路径不可用、项目尚无精确映射或映射有歧义时停止并调用 `$agent-dev-workflow-init`，让用户选择或调整项目文档位置；不得自动回退到 `Myproject`，不得在仓库创建 `.agent/`，也不得使用旧 `.agent/` 作为当前事实源。
 
 不要把 Obsidian 的绝对路径、个人计划或私有上下文写入项目公开文档。API Key、令牌和密码只从系统凭据库或 `~/.config/agent-project-workflow/local/<仓库名>/` 获取，不得写入 Obsidian。
 

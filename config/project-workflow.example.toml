@@ -2,8 +2,8 @@ version = 1
 # macOS/Linux 用正斜杠绝对路径；Windows 用反斜杠时需在 TOML 中转义为双反斜杠，
 # 例如 vault_root = "C:\\Users\\name\\Obsidian"。
 vault_root = "/path/to/your/obsidian-vault"
-projects_root = "Myproject"
 
 [projects]
-# 只有仓库重名或需要特殊目录时才添加显式映射。
-# "/path/to/source/example-project" = "Myproject/example-project"
+# 每个完成初始化的项目都记录仓库绝对路径与 Vault 内完整相对路径。
+"/path/to/personal/example-project" = "Myproject/example-project"
+"/path/to/company/product/backend" = "Rsit/product/backend"

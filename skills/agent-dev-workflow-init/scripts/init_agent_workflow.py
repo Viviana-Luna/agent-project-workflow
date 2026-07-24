@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -49,11 +52,33 @@ def parse_args() -> argparse.Namespace:
         help="代码仓库根目录，默认当前目录；--root 作为旧参数别名保留",
     )
     parser.add_argument("--config", default=str(default_config()), help="项目工作流配置文件")
-    parser.add_argument("--workflow-root", default=None, help="显式指定项目工作区；通常由配置自动解析")
     parser.add_argument(
-        "--project-name",
+        "--vault-root",
         default=None,
-        help="覆盖当前项目相对于 vault_root 的完整路径，不自动补 projects_root",
+        help="首次初始化配置时指定 Obsidian Vault；已有配置不会被此参数改写",
+    )
+    parser.add_argument(
+        "--workflow-root",
+        default=None,
+        help="临时指定绝对工作区，仅用于路径诊断；正式初始化请使用 --project-path",
+    )
+    parser.add_argument(
+        "--project-path",
+        "--project-name",
+        dest="project_path",
+        default=None,
+        help="当前项目相对于 vault_root 的完整路径；确认初始化后写入 [projects]",
+    )
+    location_mode = parser.add_mutually_exclusive_group()
+    location_mode.add_argument(
+        "--relocate",
+        action="store_true",
+        help="旧工作区存在且目标不存在时，整体移动后再更新项目映射",
+    )
+    location_mode.add_argument(
+        "--adopt-existing",
+        action="store_true",
+        help="旧工作区不存在且目标已存在时，显式接管目标并更新项目映射",
     )
     parser.add_argument("--print-workflow-root", action="store_true", help="只输出解析后的项目工作区路径")
     parser.add_argument("--date", default=None, help="兼容旧参数；模板不写入日期元信息")
@@ -105,7 +130,7 @@ def load_config(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise SystemExit(
             f"项目工作流配置不存在：{path}\n"
-            "请先配置 version = 1、vault_root 和可选的 projects_root；不要回退到仓库创建 .agent。"
+            "请先让用户选择 Obsidian Vault 和当前项目路径；不要回退到仓库创建 .agent。"
         )
     try:
         with path.open("rb") as config_file:
@@ -115,6 +140,35 @@ def load_config(path: Path) -> dict[str, Any]:
     if data.get("version") != 1:
         raise SystemExit(f"不支持的项目工作流配置版本：{data.get('version')!r}；当前只支持 version = 1")
     return data
+
+
+def load_or_prepare_config(path: Path, vault_value: str | None) -> tuple[dict[str, Any], str, bool]:
+    if path.is_file():
+        data = load_config(path)
+        configured_vault = data.get("vault_root")
+        if not isinstance(configured_vault, str) or not configured_vault.strip():
+            raise SystemExit(f"配置缺少有效的 vault_root：{path}")
+        existing = Path(configured_vault).expanduser().resolve()
+        if not existing.is_dir():
+            raise SystemExit(f"配置中的 Obsidian Vault 不存在：{existing}")
+        if vault_value:
+            requested = Path(vault_value).expanduser().resolve()
+            if requested != existing:
+                raise SystemExit(
+                    f"已有配置使用其他 Obsidian Vault：{existing}；"
+                    "本 Skill 只调整 Vault 内的项目位置，不会静默切换整个 Vault。"
+                )
+        return data, path.read_text(encoding="utf-8"), False
+
+    if not vault_value:
+        raise SystemExit(
+            f"项目工作流配置不存在：{path}\n"
+            "首次初始化时必须先让用户选择 Obsidian Vault，并通过 --vault-root 指定。"
+        )
+    vault_root = Path(vault_value).expanduser().resolve()
+    if not vault_root.is_dir():
+        raise SystemExit(f"Obsidian Vault 不存在：{vault_root}")
+    return {"version": 1, "vault_root": str(vault_root), "projects": {}}, "", True
 
 
 def validate_project_dir(value: str) -> Path:
@@ -138,32 +192,7 @@ def find_project_mapping(projects: dict[str, str], repo_root: Path, config_path:
     return next(iter(matched_values), None)
 
 
-def resolve_workflow_root(args: argparse.Namespace, repo_root: Path) -> Path:
-    if args.workflow_root:
-        workflow_root = Path(args.workflow_root).expanduser().resolve()
-    else:
-        config_path = Path(args.config).expanduser().resolve()
-        data = load_config(config_path)
-        vault_value = data.get("vault_root")
-        if not isinstance(vault_value, str) or not vault_value.strip():
-            raise SystemExit(f"配置缺少有效的 vault_root：{config_path}")
-        vault_root = Path(vault_value).expanduser().resolve()
-        projects = data.get("projects", {})
-        if projects is None:
-            projects = {}
-        if not isinstance(projects, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in projects.items()):
-            raise SystemExit(f"配置中的 [projects] 必须是字符串到字符串的映射：{config_path}")
-        project_value = args.project_name or find_project_mapping(projects, repo_root, config_path)
-        if project_value:
-            project_dir = validate_project_dir(project_value)
-        else:
-            projects_root_value = data.get("projects_root", "Myproject")
-            if not isinstance(projects_root_value, str) or not projects_root_value.strip():
-                raise SystemExit(f"配置中的 projects_root 必须是安全的相对路径：{config_path}")
-            projects_root = validate_project_dir(projects_root_value)
-            project_dir = projects_root / validate_project_dir(repo_root.name)
-        workflow_root = vault_root / project_dir
-
+def validate_workflow_root(workflow_root: Path, repo_root: Path) -> Path:
     try:
         workflow_root.relative_to(repo_root)
     except ValueError:
@@ -171,6 +200,107 @@ def resolve_workflow_root(args: argparse.Namespace, repo_root: Path) -> Path:
     else:
         raise SystemExit(f"项目工作区不能位于代码仓库内部：{workflow_root}")
     return workflow_root
+
+
+def resolve_vault_workflow_root(vault_root: Path, project_dir: Path, repo_root: Path) -> Path:
+    workflow_root = (vault_root / project_dir).resolve()
+    try:
+        workflow_root.relative_to(vault_root)
+    except ValueError as exc:
+        raise SystemExit(f"项目工作区必须位于 Obsidian Vault 内：{workflow_root}") from exc
+    return validate_workflow_root(workflow_root, repo_root)
+
+
+def project_table(data: dict[str, Any], config_path: Path) -> dict[str, str]:
+    projects = data.get("projects", {})
+    if projects is None:
+        projects = {}
+    if not isinstance(projects, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in projects.items()
+    ):
+        raise SystemExit(f"配置中的 [projects] 必须是字符串到字符串的映射：{config_path}")
+    return dict(projects)
+
+
+def legacy_workflow_root(data: dict[str, Any], repo_root: Path, vault_root: Path, config_path: Path) -> Path:
+    projects_root_value = data.get("projects_root", "Myproject")
+    if not isinstance(projects_root_value, str) or not projects_root_value.strip():
+        raise SystemExit(f"配置中的 projects_root 必须是安全的相对路径：{config_path}")
+    projects_root = validate_project_dir(projects_root_value)
+    return vault_root / projects_root / validate_project_dir(repo_root.name)
+
+
+def render_projects_table(projects: dict[str, str]) -> str:
+    lines = ["[projects]\n"]
+    for repo_value, project_value in sorted(projects.items()):
+        lines.append(
+            f"{json.dumps(repo_value, ensure_ascii=False)} = "
+            f"{json.dumps(project_value, ensure_ascii=False)}\n"
+        )
+    return "".join(lines)
+
+
+def replace_projects_table(original: str, projects: dict[str, str]) -> str:
+    rendered = render_projects_table(projects)
+    if not original:
+        raise ValueError("缺少基础配置内容")
+    lines = original.splitlines(keepends=True)
+    projects_header = re.compile(r"^\s*\[projects\]\s*(?:#.*)?$")
+    any_header = re.compile(r"^\s*\[\[?.+?\]?\]\s*(?:#.*)?$")
+    start = next(
+        (index for index, line in enumerate(lines) if projects_header.fullmatch(line.rstrip("\r\n"))),
+        None,
+    )
+    if start is None:
+        return original.rstrip() + "\n\n" + rendered
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if any_header.fullmatch(lines[index].rstrip("\r\n"))
+        ),
+        len(lines),
+    )
+    return "".join(lines[:start]) + rendered + "".join(lines[end:])
+
+
+def atomic_write_config(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_value = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_value)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file_obj:
+            file_obj.write(content.rstrip() + "\n")
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def save_project_mapping(
+    config_path: Path,
+    data: dict[str, Any],
+    original: str,
+    repo_root: Path,
+    project_path: str,
+) -> None:
+    projects = project_table(data, config_path)
+    projects[str(repo_root)] = project_path
+    if original:
+        content = replace_projects_table(original, projects)
+    else:
+        vault_value = str(Path(str(data["vault_root"])).expanduser().resolve())
+        content = (
+            f"version = 1\nvault_root = {json.dumps(vault_value, ensure_ascii=False)}\n\n"
+            f"{render_projects_table(projects)}"
+        )
+    atomic_write_config(config_path, content)
+
+
+def paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left.is_relative_to(right) or right.is_relative_to(left)
 
 
 def strip_managed_blocks(original: str) -> str:
@@ -395,12 +525,106 @@ def main() -> int:
     if not repo_root.is_dir():
         raise SystemExit(f"代码仓库根目录不存在：{repo_root}")
 
-    workflow_root = resolve_workflow_root(args, repo_root)
+    if args.workflow_root:
+        if args.project_path or args.relocate or args.adopt_existing:
+            raise SystemExit("--workflow-root 不能与项目映射或迁移参数同时使用")
+        if not args.print_workflow_root and not args.dry_run:
+            raise SystemExit("--workflow-root 只允许用于 --print-workflow-root 或 --dry-run；正式初始化请使用 --project-path")
+        workflow_root = validate_workflow_root(Path(args.workflow_root).expanduser().resolve(), repo_root)
+        config_path: Path | None = None
+        data: dict[str, Any] = {}
+        original_config = ""
+        mapping_value: str | None = None
+        source_root: Path | None = None
+        mapping_changed = False
+    else:
+        config_path = Path(args.config).expanduser().resolve()
+        data, original_config, _ = load_or_prepare_config(config_path, args.vault_root)
+        vault_value = data.get("vault_root")
+        assert isinstance(vault_value, str)
+        vault_root = Path(vault_value).expanduser().resolve()
+        projects = project_table(data, config_path)
+        configured_mapping = find_project_mapping(projects, repo_root, config_path)
+        selected_mapping = args.project_path or configured_mapping
+        if not selected_mapping:
+            raise SystemExit(
+                "当前项目尚未选择 Obsidian 文档位置。"
+                "请先让用户选择 Vault 内的完整相对路径，再使用 --project-path；"
+                "不要自动放入 Myproject。"
+            )
+        project_dir = validate_project_dir(selected_mapping)
+        mapping_value = project_dir.as_posix()
+        workflow_root = resolve_vault_workflow_root(vault_root, project_dir, repo_root)
+        mapping_changed = configured_mapping != mapping_value
+        if configured_mapping:
+            source_root = resolve_vault_workflow_root(
+                vault_root,
+                validate_project_dir(configured_mapping),
+                repo_root,
+            )
+        else:
+            legacy_value = legacy_workflow_root(data, repo_root, vault_root, config_path)
+            legacy_root = resolve_vault_workflow_root(
+                vault_root,
+                legacy_value.relative_to(vault_root),
+                repo_root,
+            )
+            source_root = legacy_root if legacy_root.exists() else None
+
     if args.print_workflow_root:
         print(workflow_root)
         return 0
 
     actions: list[str] = [f"项目工作区：{workflow_root}"]
+    moved_from: Path | None = None
+    if mapping_changed:
+        assert config_path is not None
+        assert mapping_value is not None
+        actions.append(
+            f"{'计划记录' if args.dry_run else '已记录'}项目映射："
+            f"{repo_root} -> {mapping_value}（{config_path}）"
+        )
+
+        if source_root and source_root != workflow_root and source_root.exists():
+            if paths_overlap(source_root, workflow_root):
+                raise SystemExit(f"旧工作区与新工作区不能互相包含：{source_root} -> {workflow_root}")
+            if workflow_root.exists():
+                raise SystemExit(
+                    f"旧工作区和目标工作区同时存在，不能自动合并：{source_root}、{workflow_root}"
+                )
+            if not args.relocate:
+                raise SystemExit(
+                    f"检测到旧工作区：{source_root}\n"
+                    f"先使用 --relocate --dry-run 预览，再显式执行整体移动到：{workflow_root}"
+                )
+            actions.append(f"{'计划移动' if args.dry_run else '已移动'}工作区：{source_root} -> {workflow_root}")
+            if not args.dry_run:
+                workflow_root.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(source_root, workflow_root)
+                moved_from = source_root
+        elif workflow_root.exists() and source_root != workflow_root:
+            if not args.adopt_existing:
+                raise SystemExit(
+                    f"目标工作区已存在：{workflow_root}\n"
+                    "确认它属于当前项目后，使用 --adopt-existing --dry-run 预览，再显式接管。"
+                )
+            actions.append(f"{'计划接管' if args.dry_run else '已接管'}已有工作区：{workflow_root}")
+        elif args.relocate:
+            raise SystemExit("没有发现可迁移的旧工作区，不能使用 --relocate")
+        elif args.adopt_existing:
+            raise SystemExit("目标工作区不存在，不能使用 --adopt-existing")
+
+        if not args.dry_run:
+            try:
+                save_project_mapping(config_path, data, original_config, repo_root, mapping_value)
+            except Exception:
+                if moved_from is not None and workflow_root.exists():
+                    moved_from.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(workflow_root, moved_from)
+                raise
+    elif args.relocate or args.adopt_existing:
+        raise SystemExit("项目映射没有变化，无需使用 --relocate 或 --adopt-existing")
+
     planning_root = workflow_root / "planning"
     for directory in (
         workflow_root,

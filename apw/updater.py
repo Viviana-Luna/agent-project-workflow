@@ -180,7 +180,7 @@ class UpdateManager:
         state = load_state(self.paths.state_file, __version__)
         manager = LifecycleManager(self.paths, bundle=Bundle(archive=staged_pyz))
         manager.assert_safe_state(state)
-        _, planned = manager.plan_install(state.selected_clients)
+        _, planned = manager.plan_repair()
         if plan_callback is not None:
             try:
                 plan_callback(planned)
@@ -200,11 +200,9 @@ class UpdateManager:
             rollback_root = Path(temp)
             snapshots = self._snapshot([path for path in snapshot_paths if path.resolve() not in excluded], rollback_root)
             try:
-                result = manager.install(
-                    state.selected_clients,
+                result = manager.repair(
                     conflict_policy=conflict_policy,
                     confirmed_direct_replace=confirmed_direct_replace,
-                    configure=False,
                 )
                 findings = manager.doctor()
                 if any(item.level == "error" for item in findings):

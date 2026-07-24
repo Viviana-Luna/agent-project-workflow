@@ -105,7 +105,7 @@ class UpdaterTests(unittest.TestCase):
             vault.mkdir()
             paths = AppPaths.from_home(home)
             manager = LifecycleManager(paths, Bundle(root=ROOT), environ={})
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             calls: list[str] = []
 
             def fetcher(url: str) -> bytes:
@@ -127,7 +127,7 @@ class UpdaterTests(unittest.TestCase):
             home.mkdir()
             vault.mkdir()
             paths = AppPaths.from_home(home)
-            LifecycleManager(paths, Bundle(root=ROOT), environ={}).install(["codex"], vault_root=vault)
+            LifecycleManager(paths, Bundle(root=ROOT), environ={}).install(["codex"])
             manifest = make_manifest(next_version(), b"expected")
 
             def fetcher(url: str) -> bytes:
@@ -153,7 +153,7 @@ class UpdaterTests(unittest.TestCase):
                     "APW_RUNTIME_UV": "0.11.16",
                 },
             )
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             manifest = make_manifest(next_version(), b"unused")
             updater = UpdateManager(paths, lambda _url: manifest)
             with self.assertRaisesRegex(UpdateError, "重新运行 Bootstrap"):
@@ -181,7 +181,7 @@ class UpdaterTests(unittest.TestCase):
             vault.mkdir()
             build.mkdir()
             paths = AppPaths.from_home(home)
-            LifecycleManager(paths, Bundle(root=ROOT), environ={}).install(["codex"], vault_root=vault)
+            LifecycleManager(paths, Bundle(root=ROOT), environ={}).install(["codex"])
             pyz = build_zipapp(build)
             payload = pyz.read_bytes()
             manifest = make_manifest(next_version(), payload)
@@ -215,7 +215,7 @@ class UpdaterTests(unittest.TestCase):
             build.mkdir()
             paths = AppPaths.from_home(home)
             manager = LifecycleManager(paths, Bundle(root=ROOT), environ={})
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             rule = home / ".codex" / "AGENTS.md"
             original_rule = rule.read_bytes()
             original_state = paths.state_file.read_bytes()
@@ -248,7 +248,7 @@ class UpdaterTests(unittest.TestCase):
             vault.mkdir()
             paths = AppPaths.from_home(home)
             manager = LifecycleManager(paths, Bundle(root=ROOT), environ={})
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             state = manager.state()
             state.manager_version = "2.0.0"
             save_state(paths.state_file, state)

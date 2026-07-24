@@ -135,11 +135,18 @@ def resolve_workflow_root(repo_root: Path, config_path: Path, explicit: str | No
         if mapped:
             relative = safe_relative(mapped, "项目映射")
         else:
-            root_value = data.get("projects_root", "Myproject")
-            if not isinstance(root_value, str):
-                raise ValueError(f"projects_root 必须是字符串：{config_path}")
-            relative = safe_relative(root_value, "projects_root") / safe_relative(repo_root.name, "仓库名")
-        workflow_root = Path(vault_value).expanduser().resolve() / relative
+            raise ValueError(
+                f"当前项目尚未选择 Obsidian 文档位置：{repo_root}；"
+                "请使用 $agent-dev-workflow-init 让用户选择并记录项目映射"
+            )
+        vault_root = Path(vault_value).expanduser().resolve()
+        if not vault_root.is_dir():
+            raise ValueError(f"配置中的 Obsidian Vault 不存在：{vault_root}")
+        workflow_root = (vault_root / relative).resolve()
+        try:
+            workflow_root.relative_to(vault_root)
+        except ValueError as exc:
+            raise ValueError(f"项目工作区必须位于 Obsidian Vault 内：{workflow_root}") from exc
 
     try:
         workflow_root.relative_to(repo_root)

@@ -41,6 +41,15 @@ class TuiAndShellTests(unittest.TestCase):
                 output_stream=io.StringIO(),
             )
 
+    def test_numbered_multi_select_accepts_all(self) -> None:
+        selected = select_many(
+            "选择工作流 Skill",
+            [Choice("init", "初始化"), Choice("todo", "执行 TODO")],
+            input_stream=io.StringIO("all\n"),
+            output_stream=io.StringIO(),
+        )
+        self.assertEqual(selected, ["init", "todo"])
+
     def test_numbered_single_select_uses_default(self) -> None:
         selected = choose_one(
             "选择操作",

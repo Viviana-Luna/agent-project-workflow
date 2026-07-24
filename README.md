@@ -49,13 +49,14 @@ Windows（PowerShell）：
 irm https://github.com/Viviana-Luna/agent-project-workflow/releases/latest/download/install.ps1 | iex
 ```
 
-Bootstrap 会安装到用户目录并启动交互向导。向导依次选择 Obsidian Vault、项目根目录和需要接入的客户端；发现已有规则或同名 Skill 时先展示差异，再允许压缩归档后替换或明确确认的无备份直接替换。
+Bootstrap 会安装到用户目录并启动交互向导。向导先检查四个受支持客户端是否已安装，再让用户每次只选择一个安装内容：共享工作流 Skill，或一个已检测客户端的规则文件。选择共享 Skill 后会逐项显示同名目录的“未安装”“已是当前版本”或“版本有差异”，可按空格多选或按 `A` 全选，再只覆盖所选项；完成后向导会继续询问是否为一个检测到的客户端安装规则，可明确跳过。两个步骤各自预览、各自确认，绝不自动写入规则。规则文件只比较托管区块的内容版本，并保留区块外用户内容。共享 Skill 安装到 `~/.agents/skills/`，由 Codex、Kimi Code、OpenCode 发现；规则文件按客户端写入其原生位置。Claude Code 的 Skill 继续使用其专属目录，仅由兼容批量入口管理。向导不会再默认一次接入所有检测到的客户端，也不会要求或创建 Obsidian 项目配置。
 
 安装完成后使用：
 
 ```bash
 apw
-apw install --clients codex,claude-code,kimi-code,opencode
+apw install --skills
+apw install --rule codex
 apw clients
 apw status
 apw update --check
@@ -73,16 +74,15 @@ apw uninstall
 
 ```bash
 python3 -m apw install \
-  --clients codex,claude-code,kimi-code,opencode \
+  --skills \
   --dry-run
 ```
 
-首次非交互安装必须明确提供 Vault：
+非交互安装同样只处理用户级内容：
 
 ```bash
 python3 -m apw install \
-  --clients codex,opencode \
-  --vault-root /path/to/obsidian-vault \
+  --rule codex \
   --non-interactive \
   --yes
 ```
@@ -91,16 +91,22 @@ python3 -m apw install \
 
 ## 初始化项目工作区
 
-在代码仓库中运行：
+第一次接入项目时，先让用户选择 Obsidian Vault 和 Vault 内的完整项目路径，再预览：
 
 ```bash
 python3 ~/.agents/skills/agent-dev-workflow-init/scripts/init_agent_workflow.py \
   --repo-root . \
+  --vault-root /path/to/obsidian-vault \
+  --project-path "Myproject/example-project" \
   --dry-run
 
 python3 ~/.agents/skills/agent-dev-workflow-init/scripts/init_agent_workflow.py \
-  --repo-root .
+  --repo-root . \
+  --vault-root /path/to/obsidian-vault \
+  --project-path "Myproject/example-project"
 ```
+
+已有配置时省略 `--vault-root`。项目可以选择 `Myproject/...`、`Rsit/...` 或 Vault 内其他安全相对路径；后续通过 `$agent-dev-workflow-init` 的 `--relocate` 或 `--adopt-existing` 预览并调整位置。
 
 检查工作区一致性：
 
@@ -118,20 +124,21 @@ python3 scripts/workflow_doctor.py --repo-root .
 
 Windows 上管理器目录位于 `%LOCALAPPDATA%\agent-project-workflow\`，`current` 版本指针用目录联接（junction）而非符号链接，PATH 写入用户环境变量（注册表）。
 
-默认项目目录是 `<vault_root>/Myproject/<仓库名>`；只有仓库重名或目录特殊时才需要 `[projects]` 显式映射。
+`apw install` 不创建项目配置。每个项目首次初始化时都必须选择位置，并在 `[projects]` 中记录仓库绝对路径到 Vault 内完整相对路径的精确映射；没有映射时不得自动回退到 `Myproject`。旧 `projects_root` 只用于识别待迁移的历史默认工作区。
 
 ## 当前能力
 
 - 创建标准 Obsidian 项目工作区，保留已有文档。
+- 首次初始化时选择并记录项目文档位置，后续安全改绑或整体迁移。
 - 将旧 `.agent` 去密迁移到仓库外工作区。
 - 从 TODO 选择单个任务并执行完整工程闭环。
 - 检查目录、TODO 引用、计划状态、遗留路径和常见秘密载体。
-- 交互选择并接入 Codex、Claude Code、Kimi Code、OpenCode。
+- 先检测 Codex、Claude Code、Kimi Code、OpenCode，再单独安装共享 Skill 或一个客户端规则。
 - 通过托管规则区块保留用户自定义内容。
 - 手动检查和安装 GitHub Release 更新，校验 SHA-256 并保留上一版本用于正常更新失败回滚。
 - 显式降级必须指定目标版本、允许降级，并完成独立的二次确认。
 - 管理客户端增删、状态、诊断、修复和安全卸载。
-- 对旧规则和重复 Skill 提供差异预览、压缩归档或明确确认的无备份替换。
+- 对同名 Skill 和托管规则区块显示版本状态；未托管、损坏或无法读取的内容仍提供差异预览、压缩归档或明确确认的无备份替换。
 
 ## 安全边界
 

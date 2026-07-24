@@ -43,10 +43,12 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           APW_SMOKE_HOME="$RUNNER_TEMP/apw-home"
-          APW_SMOKE_VAULT="$RUNNER_TEMP/apw-vault"
-          mkdir -p "$APW_SMOKE_VAULT"
           APW_INSTALL_HOME="$APW_SMOKE_HOME" APW_BOOTSTRAP_SKIP_WIZARD=1 APW_PYZ_SOURCE="$GITHUB_WORKSPACE/dist/apw.pyz" sh dist/install.sh
-          "$APW_SMOKE_HOME/.local/bin/apw" install --clients codex,claude-code,kimi-code,opencode --vault-root "$APW_SMOKE_VAULT" --non-interactive --yes
+          "$APW_SMOKE_HOME/.local/bin/apw" install --skills --non-interactive --yes
+          "$APW_SMOKE_HOME/.local/bin/apw" install --rule codex --non-interactive --yes
+          "$APW_SMOKE_HOME/.local/bin/apw" install --rule claude-code --non-interactive --yes
+          "$APW_SMOKE_HOME/.local/bin/apw" install --rule kimi-code --non-interactive --yes
+          "$APW_SMOKE_HOME/.local/bin/apw" install --rule opencode --non-interactive --yes
           "$APW_SMOKE_HOME/.local/bin/apw" doctor
       - name: 全新 HOME Bootstrap 与诊断（Windows）
         if: runner.os == 'Windows'

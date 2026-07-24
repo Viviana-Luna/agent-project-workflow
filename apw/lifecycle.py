@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
@@ -44,6 +43,7 @@ class Change:
     desired_digest: str = ""
     desired_text: str | None = None
     bundle_prefix: str | None = None
+    version_status: str = ""
     conflict: bool = False
     detail: str = ""
 
@@ -110,6 +110,24 @@ class LifecycleManager:
             raise LifecycleError("至少选择一个客户端")
         return normalized
 
+    def shared_skills_installed(self, state: InstallState | None = None) -> bool:
+        current = state or self.state()
+        shared_root = self.adapters["codex"].skills_path(self.paths.home).resolve(strict=False)
+        return any(
+            record.kind == "skill" and Path(record.path).parent.resolve(strict=False) == shared_root
+            for record in current.installations.values()
+        )
+
+    def plan_install_skills(self, skill_names: Iterable[str] | None = None) -> tuple[InstallState, list[Change]]:
+        state = self.assert_safe_state()
+        target = self.adapters["codex"].skills_path(self.paths.home)
+        return state, self._plan_skills(target, [], state, skill_names)
+
+    def plan_install_rule(self, client_id: str) -> tuple[InstallState, list[Change]]:
+        selected = self.validate_clients([client_id])
+        state = self.assert_safe_state()
+        return state, [self._plan_rule(self.adapters[selected[0]], state)]
+
     def plan_install(self, client_ids: Iterable[str]) -> tuple[InstallState, list[Change]]:
         selected = self.validate_clients(client_ids)
         state = self.assert_safe_state()
@@ -134,9 +152,6 @@ class LifecycleManager:
         conflict_policy: str = "abort",
         confirmed_direct_replace: bool = False,
         dry_run: bool = False,
-        vault_root: Path | None = None,
-        projects_root: str = "Myproject",
-        configure: bool = True,
     ) -> OperationResult:
         selected = self.validate_clients(client_ids)
         state, changes = self.plan_install(selected)
@@ -144,8 +159,6 @@ class LifecycleManager:
         self._resolve_conflicts(result, conflict_policy, confirmed_direct_replace, dry_run)
         if dry_run:
             return result
-        if configure:
-            self._ensure_config(vault_root, projects_root)
         for change in changes:
             self._apply_change(change)
             if change.kind == "legacy-skill":
@@ -165,6 +178,59 @@ class LifecycleManager:
             state.runtime["python_version"] = self.environ["APW_RUNTIME_PYTHON_VERSION"]
         if self.environ.get("APW_RUNTIME_UV"):
             state.runtime["uv"] = self.environ["APW_RUNTIME_UV"]
+        save_state(self.paths.state_file, state)
+        return result
+
+    def install_skills(
+        self,
+        *,
+        skill_names: Iterable[str] | None = None,
+        conflict_policy: str = "abort",
+        confirmed_direct_replace: bool = False,
+        dry_run: bool = False,
+    ) -> OperationResult:
+        state, changes = self.plan_install_skills(skill_names)
+        result = OperationResult(changes=changes, dry_run=dry_run)
+        self._resolve_conflicts(result, conflict_policy, confirmed_direct_replace, dry_run)
+        if dry_run:
+            return result
+        for change in changes:
+            self._apply_change(change)
+            state.installations[change.key] = InstallationRecord(
+                key=change.key,
+                path=str(change.path),
+                kind=change.kind,
+                digest=change.desired_digest,
+                clients=[],
+            )
+        self._update_runtime(state)
+        save_state(self.paths.state_file, state)
+        return result
+
+    def install_rule(
+        self,
+        client_id: str,
+        *,
+        conflict_policy: str = "abort",
+        confirmed_direct_replace: bool = False,
+        dry_run: bool = False,
+    ) -> OperationResult:
+        state, changes = self.plan_install_rule(client_id)
+        result = OperationResult(changes=changes, dry_run=dry_run)
+        self._resolve_conflicts(result, conflict_policy, confirmed_direct_replace, dry_run)
+        if dry_run:
+            return result
+        for change in changes:
+            self._apply_change(change)
+            state.installations[change.key] = InstallationRecord(
+                key=change.key,
+                path=str(change.path),
+                kind=change.kind,
+                digest=change.desired_digest,
+                clients=[client_id],
+            )
+        state.selected_clients = sorted(set(state.selected_clients) | {client_id})
+        self._update_runtime(state)
         save_state(self.paths.state_file, state)
         return result
 
@@ -210,16 +276,46 @@ class LifecycleManager:
         confirmed_direct_replace: bool = False,
         dry_run: bool = False,
     ) -> OperationResult:
+        state, changes = self.plan_repair()
+        result = OperationResult(changes=changes, dry_run=dry_run)
+        self._resolve_conflicts(result, conflict_policy, confirmed_direct_replace, dry_run)
+        if dry_run:
+            return result
+        for change in changes:
+            self._apply_change(change)
+            state.installations[change.key] = InstallationRecord(
+                key=change.key,
+                path=str(change.path),
+                kind=change.kind,
+                digest=change.desired_digest,
+                clients=sorted(change.clients),
+            )
+        self._update_runtime(state)
+        save_state(self.paths.state_file, state)
+        return result
+
+    def plan_repair(self) -> tuple[InstallState, list[Change]]:
         state = self.assert_safe_state()
-        if not state.selected_clients:
-            raise LifecycleError("尚未记录已安装客户端，无法修复")
-        return self.install(
-            state.selected_clients,
-            conflict_policy=conflict_policy,
-            confirmed_direct_replace=confirmed_direct_replace,
-            dry_run=dry_run,
-            configure=False,
-        )
+        if not state.installations:
+            raise LifecycleError("尚未记录已安装内容，无法修复")
+        changes = [self._plan_rule(self.adapters[client_id], state) for client_id in state.selected_clients]
+        skill_roots = {Path(record.path).parent for record in state.installations.values() if record.kind == "skill"}
+        for root in sorted(skill_roots, key=str):
+            skill_names = sorted(
+                Path(record.path).name
+                for record in state.installations.values()
+                if record.kind == "skill" and Path(record.path).parent == root
+            )
+            clients = sorted(
+                {
+                    client
+                    for record in state.installations.values()
+                    if record.kind == "skill" and Path(record.path).parent == root
+                    for client in record.clients
+                }
+            )
+            changes.extend(self._plan_skills(root, clients, state, skill_names))
+        return state, changes
 
     def uninstall(
         self,
@@ -256,8 +352,6 @@ class LifecycleManager:
             state = self.state()
         except ValueError as exc:
             return [Finding("error", "state-invalid", str(exc), str(self.paths.state_file))]
-        if not self.paths.config_file.is_file() and not self.paths.legacy_config_file.is_file():
-            findings.append(Finding("error", "config-missing", "没有找到工作流配置", str(self.paths.config_file)))
         for client_id in state.selected_clients:
             if client_id not in self.adapters:
                 findings.append(Finding("error", "adapter-missing", f"缺少客户端适配器：{client_id}"))
@@ -281,10 +375,16 @@ class LifecycleManager:
     def status(self) -> dict[str, object]:
         state = self.state()
         findings = self.doctor()
+        config_path = (
+            self.paths.config_file
+            if self.paths.config_file.exists()
+            else self.paths.legacy_config_file if self.paths.legacy_config_file.exists() else None
+        )
         return {
             "manager_version": state.manager_version or __version__,
             "selected_clients": state.selected_clients,
-            "config": str(self.paths.config_file if self.paths.config_file.exists() else self.paths.legacy_config_file),
+            "shared_skills_installed": self.shared_skills_installed(state),
+            "config": str(config_path) if config_path else None,
             "state": str(self.paths.state_file),
             "errors": sum(item.level == "error" for item in findings),
             "warnings": sum(item.level == "warning" for item in findings),
@@ -300,10 +400,18 @@ class LifecycleManager:
             "unchanged": "未变化",
             "retain": "保留",
         }
+        versions = {
+            "missing": "未安装",
+            "current": "已是当前版本",
+            "different": "版本有差异",
+            "unreadable": "无法比较版本",
+            "unmanaged": "未托管内容",
+        }
         lines: list[str] = []
         for change in changes:
             conflict = " [冲突]" if change.conflict else ""
-            lines.append(f"{labels.get(change.action, change.action)}：{change.path}{conflict}")
+            label = versions.get(change.version_status, labels.get(change.action, change.action))
+            lines.append(f"{label}：{change.path}{conflict}")
             if change.detail:
                 lines.append(change.detail.rstrip())
         return "\n".join(lines)
@@ -323,6 +431,7 @@ class LifecycleManager:
                 clients=[adapter.id],
                 desired_digest=desired_digest,
                 desired_text=f"{rendered}\n",
+                version_status="missing",
             )
         try:
             existing = path.read_bytes().decode("utf-8")
@@ -335,6 +444,7 @@ class LifecycleManager:
                 clients=[adapter.id],
                 desired_digest=desired_digest,
                 desired_text=f"{rendered}\n",
+                version_status="unreadable",
                 conflict=True,
                 detail=f"无法读取现有规则：{exc}",
             )
@@ -349,6 +459,7 @@ class LifecycleManager:
                 clients=[adapter.id],
                 desired_digest=desired_digest,
                 desired_text=f"{rendered}\n",
+                version_status="unmanaged",
                 conflict=True,
                 detail=str(exc),
             )
@@ -362,6 +473,7 @@ class LifecycleManager:
                 clients=[adapter.id],
                 desired_digest=desired_digest,
                 desired_text=desired_text,
+                version_status="unmanaged",
                 conflict=True,
                 detail=unified_diff(existing, desired_text, path),
             )
@@ -381,13 +493,20 @@ class LifecycleManager:
             clients=[adapter.id],
             desired_digest=desired_digest,
             desired_text=desired_text,
+            version_status="current" if action == "unchanged" else "different",
             conflict=drift or unknown,
             detail=unified_diff(existing, desired_text, path) if action != "unchanged" else "",
         )
 
-    def _plan_skills(self, target_root: Path, clients: list[str], state: InstallState) -> list[Change]:
+    def _plan_skills(
+        self,
+        target_root: Path,
+        clients: list[str],
+        state: InstallState,
+        skill_names: Iterable[str] | None = None,
+    ) -> list[Change]:
         changes: list[Change] = []
-        for skill_name in self._skill_names():
+        for skill_name in self._select_skill_names(skill_names):
             prefix = f"skills/{skill_name}"
             path = target_root / skill_name
             key = f"skill:{path}"
@@ -397,16 +516,19 @@ class LifecycleManager:
                 action = "create"
                 conflict = False
                 detail = ""
+                version_status = "missing"
             else:
                 current = sha256_path(path)
                 if current == desired:
                     action = "unchanged"
                     conflict = False
                     detail = ""
+                    version_status = "current"
                 else:
                     action = "replace"
                     conflict = record is None or current != record.digest
                     detail = self._directory_diff(path, prefix)
+                    version_status = "different"
             changes.append(
                 Change(
                     key=key,
@@ -416,6 +538,7 @@ class LifecycleManager:
                     clients=sorted(clients),
                     desired_digest=desired,
                     bundle_prefix=prefix,
+                    version_status=version_status,
                     conflict=conflict,
                     detail=detail,
                 )
@@ -494,7 +617,9 @@ class LifecycleManager:
             self.adapters[client].skills_path(self.paths.home) for client in remaining if client in self.adapters
         }
         for key, record in sorted(state.installations.items()):
-            if record.kind != "skill" or not removing_set.intersection(record.clients):
+            if record.kind != "skill":
+                continue
+            if remaining and not removing_set.intersection(record.clients):
                 continue
             path = Path(record.path)
             if any(path.parent == root for root in remaining_skill_roots):
@@ -581,27 +706,14 @@ class LifecycleManager:
         finally:
             shutil.rmtree(temp_root, ignore_errors=True)
 
-    def _ensure_config(self, vault_root: Path | None, projects_root: str) -> None:
-        if self.paths.config_file.is_file() or self.paths.legacy_config_file.is_file():
-            return
-        if vault_root is None:
-            raise LifecycleError("首次安装需要指定 Obsidian Vault 路径")
-        root = vault_root.expanduser().resolve()
-        if not root.is_dir():
-            raise LifecycleError(f"Obsidian Vault 不存在：{root}")
-        if (
-            not projects_root.strip()
-            or "/" in projects_root
-            or "\\" in projects_root
-            or projects_root in {".", ".."}
-            or any(ord(character) < 32 for character in projects_root)
-        ):
-            raise LifecycleError(f"projects_root 不是安全目录名：{projects_root!r}")
-        payload = (
-            f"version = 1\nvault_root = {json.dumps(str(root), ensure_ascii=False)}\n"
-            f"projects_root = {json.dumps(projects_root, ensure_ascii=False)}\n\n[projects]\n"
-        )
-        atomic_write(self.paths.config_file, payload.encode("utf-8"), mode=0o600)
+    def _update_runtime(self, state: InstallState) -> None:
+        state.manager_version = __version__
+        if self.environ.get("APW_RUNTIME_PYTHON"):
+            state.runtime["python_executable"] = self.environ["APW_RUNTIME_PYTHON"]
+        if self.environ.get("APW_RUNTIME_PYTHON_VERSION"):
+            state.runtime["python_version"] = self.environ["APW_RUNTIME_PYTHON_VERSION"]
+        if self.environ.get("APW_RUNTIME_UV"):
+            state.runtime["uv"] = self.environ["APW_RUNTIME_UV"]
 
     def _skill_names(self) -> list[str]:
         names = {
@@ -610,6 +722,18 @@ class LifecycleManager:
             if len(Path(name).parts) >= 3 and Path(name).name == "SKILL.md"
         }
         return sorted(names)
+
+    def _select_skill_names(self, skill_names: Iterable[str] | None) -> list[str]:
+        available = self._skill_names()
+        if skill_names is None:
+            return available
+        selected = list(dict.fromkeys(skill_names))
+        unknown = sorted(set(selected) - set(available))
+        if unknown:
+            raise LifecycleError(f"未找到工作流 Skill：{', '.join(unknown)}")
+        if not selected:
+            raise LifecycleError("至少选择一个工作流 Skill")
+        return selected
 
     def _bundle_tree_digest(self, prefix: str) -> str:
         parts: list[bytes] = []

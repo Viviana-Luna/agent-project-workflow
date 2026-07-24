@@ -40,7 +40,8 @@ class WorkflowDoctorTests(unittest.TestCase):
         )
         config = root / "config.toml"
         config.write_text(
-            f'version = 1\nvault_root = {json.dumps(str(vault))}\nprojects_root = "Myproject"\n\n[projects]\n',
+            f'version = 1\nvault_root = {json.dumps(str(vault))}\n\n'
+            f'[projects]\n{json.dumps(str(repo))} = "Myproject/repo"\n',
             encoding="utf-8",
         )
         config.chmod(0o600)
@@ -78,6 +79,17 @@ class WorkflowDoctorTests(unittest.TestCase):
             result = self.run_doctor(repo, config)
             self.assertEqual(result.returncode, 1)
             self.assertIn("checkbox-outside-todo", result.stdout)
+
+    def test_unmapped_project_fails_instead_of_using_default_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo, _, config = self.make_fixture(Path(temp))
+            config.write_text(
+                config.read_text(encoding="utf-8").split("[projects]", 1)[0] + "[projects]\n",
+                encoding="utf-8",
+            )
+            result = self.run_doctor(repo, config)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("尚未选择 Obsidian 文档位置", result.stderr)
 
 
 if __name__ == "__main__":

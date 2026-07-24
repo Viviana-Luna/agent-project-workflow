@@ -80,7 +80,7 @@ def select_many(
         marker = "*" if choice.value in initial else " "
         suffix = f" — {choice.description}" if choice.description else ""
         output_stream.write(f"  {index}. [{marker}] {choice.label}{suffix}\n")
-    output_stream.write("输入编号，使用逗号分隔；直接回车保留默认选择：")
+    output_stream.write("输入编号，使用逗号分隔；all 全选；直接回车保留默认选择：")
     output_stream.flush()
     value = input_stream.readline()
     if value == "":
@@ -88,6 +88,8 @@ def select_many(
     value = value.strip()
     if not value:
         return [choice.value for choice in choices if choice.value in initial]
+    if value.lower() in {"all", "a", "全部", "全选"}:
+        return [choice.value for choice in choices]
     indexes = _parse_indexes(value, len(choices))
     return [choices[index - 1].value for index in indexes]
 
@@ -194,7 +196,7 @@ def _select_many_tty(
                 marker = "x" if choice.value in selected else " "
                 suffix = f" — {choice.description}" if choice.description else ""
                 output_stream.write(f"\x1b[2K {cursor} [{marker}] {choice.label}{suffix}\r\n")
-            output_stream.write("\x1b[2K↑↓ 移动  Space 选择  Enter 继续  Q 退出")
+            output_stream.write("\x1b[2K↑↓ 移动  Space 选择  A 全选/取消全选  Enter 继续  Q 退出")
             output_stream.flush()
             key = input_stream.read(1)
             if key == "\x1b":
@@ -209,6 +211,12 @@ def _select_many_tty(
                     selected.remove(value)
                 else:
                     selected.add(value)
+            elif key.lower() == "a":
+                values = {choice.value for choice in choices}
+                if selected == values:
+                    selected.clear()
+                else:
+                    selected = values
             elif key in {"\r", "\n"}:
                 break
             elif key.lower() == "q" or key == "\x03":

@@ -34,10 +34,10 @@
 
 1. 用 Git 根目录作为项目根目录；不是 Git 仓库时使用当前工作目录。
 2. 优先读取 `AGENT_PROJECT_WORKFLOW_CONFIG` 指定的文件；未设置时依次尝试 `~/.config/agent-project-workflow/config.toml` 和兼容旧安装的 `~/.codex/project-workflow.toml`。
-3. 优先使用 `[projects]` 中与项目根目录绝对路径完全匹配的相对目录；没有映射时使用 `<projects_root>/<仓库名>`，`projects_root` 缺失则按 `Myproject` 处理。
-4. 最终工作区为 `<vault_root>/<解析后的相对目录>/`。
+3. 使用 `[projects]` 中与项目根目录绝对路径完全匹配的 Vault 内相对目录；每个项目都必须有精确映射。
+4. 最终工作区为 `<vault_root>/<项目映射>/`。
 
-如果配置文件缺失、`vault_root` 不可用或项目映射有歧义，应先向用户说明，不得退回仓库创建 `.agent/`。
+配置文件缺失、`vault_root` 不可用、项目尚无映射或映射有歧义时，使用 `$agent-dev-workflow-init`：首次初始化必须让用户选择 Obsidian Vault 和 Vault 内的完整项目路径，不得自动放入 `Myproject`。后续改变位置也必须通过该 Skill 预览并安全改绑或迁移，不得只移动目录或只改配置。旧配置中的 `projects_root` 仅用于识别待迁移的历史默认位置，不再作为新项目回退规则。
 
 项目工作区的常用结构如下：
 

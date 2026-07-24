@@ -1,6 +1,6 @@
 ---
 name: migrate-project-workflow-to-obsidian
-description: 将项目仓库中的旧 `.agent` 私有开发工作流安全迁移到同步盘中的 Obsidian 项目目录，核对 Agent Project Workflow 配置与相关全局规则，并更新仓库 `.gitignore`，完成秘密隔离、文件校验、Obsidian 可见性验收和旧目录可恢复收口。用于用户要求“把这个项目改成新的 Obsidian 工作流”“迁移/删除 .agent”“让其他项目也使用 Myproject 下的 TODO、planning、constraints”等场景。
+description: 将项目仓库中的旧 `.agent` 私有开发工作流安全迁移到用户选择的 Obsidian 项目目录，核对 Agent Project Workflow 配置与相关全局规则，并更新仓库 `.gitignore`，完成秘密隔离、精确项目映射、文件校验、Obsidian 可见性验收和旧目录可恢复收口。用于用户要求“把这个项目改成新的 Obsidian 工作流”“迁移/删除 .agent”“选择或调整项目 TODO、planning、constraints 的存放位置”等场景。
 ---
 
 # 迁移项目工作流到 Obsidian
@@ -23,7 +23,7 @@ description: 将项目仓库中的旧 `.agent` 私有开发工作流安全迁移
 3. 只列出秘密文件的路径、权限和配置键名，不输出秘密值。
 4. 查找 `.agent/` 路径引用；区分旧工作流引用与产品合法名称，例如 `.agent-vp-data`、`.agents/skills`。
 5. 检查最终 Obsidian 目标是否存在、是否为空、是否已有用户笔记。
-6. 确认最终项目目录。用户未指定时默认使用 `Myproject/<仓库目录名>`；不要先迁到临时位置再猜最终路径。
+6. 让用户确认 Vault 内的完整项目路径。可以根据代码目录提出 `Myproject/<项目>`、`Rsit/<产品>/<项目>` 等候选，但不得代替用户选择；不要先迁到临时位置再猜最终路径。
 
 如果目标非空，先比较同名文件并形成合并方案，不得直接覆盖用户笔记。
 
@@ -74,30 +74,26 @@ python3 scripts/prepare_migration.py --repo-root <仓库根目录>
 
 ## 4. 准备目标与全局映射
 
-确认 `~/.config/agent-project-workflow/config.toml` 使用统一项目根目录；旧安装可以继续读取 `~/.codex/project-workflow.toml`：
+确认最终 Obsidian Vault 和项目相对路径。配置不存在时由初始化 Skill 在用户选择后创建；旧安装可以继续读取 `~/.codex/project-workflow.toml`：
 
 ```toml
 version = 1
 vault_root = "/本机/Obsidian/仓库路径"
-projects_root = "Myproject"
 
 [projects]
-# 只有仓库重名或目录特殊时才需要显式映射。
-"<仓库绝对路径>" = "Myproject/<项目名>"
+"<仓库绝对路径>" = "<用户选择的 Vault 内项目路径>"
 ```
 
-没有特殊情况时，初始化脚本会自动解析到 `<vault_root>/Myproject/<仓库名>`，无需为每个项目重复添加映射。已有显式映射必须保留，配置权限保持 `0600`。
+每个项目都必须有精确映射。已有其他项目映射必须保留，配置权限保持 `0600`；旧 `projects_root` 只能帮助识别历史默认工作区，不能替用户决定新目标。
 
-用初始化脚本只读预览解析结果：
+复制前用初始化脚本只读预览用户选择的目标：
 
 ```bash
 python3 ~/.agents/skills/agent-dev-workflow-init/scripts/init_agent_workflow.py \
   --repo-root <仓库根目录> \
+  --vault-root "<配置缺失时选择的 Vault>" \
+  --project-path "<用户选择的 Vault 内项目路径>" \
   --print-workflow-root
-
-python3 ~/.agents/skills/agent-dev-workflow-init/scripts/init_agent_workflow.py \
-  --repo-root <仓库根目录> \
-  --dry-run
 ```
 
 解析出的路径必须与用户确认的最终目录完全一致。
@@ -117,6 +113,19 @@ rsync -a '<迁移包>/project/' '<Obsidian 最终项目目录>/'
 - 用户完成后继续只读校验。
 
 已有项目笔记不在迁移包中时必须保留。目标目录需要调整时，先确认新目录为空，再整体移动；不要形成 `<项目>/<项目>` 重复嵌套。
+
+迁移包复制并通过文件校验后，使用初始化脚本补齐结构并记录精确映射。目标此时已经存在，必须先预览显式接管：
+
+```bash
+python3 ~/.agents/skills/agent-dev-workflow-init/scripts/init_agent_workflow.py \
+  --repo-root <仓库根目录> \
+  --vault-root "<配置缺失时选择的 Vault>" \
+  --project-path "<用户选择的 Vault 内项目路径>" \
+  --adopt-existing \
+  --dry-run
+```
+
+确认后去掉 `--dry-run`。如果初始化脚本检测到另一个旧工作区仍存在，停止并先形成内容比较与迁移方案，不得用 `--adopt-existing` 绕过。
 
 ## 6. 双重校验
 

@@ -31,7 +31,6 @@ class LifecycleTests(unittest.TestCase):
             manager, vault = self.make_manager(Path(temp))
             result = manager.install(
                 ["codex", "claude-code", "kimi-code", "opencode"],
-                vault_root=vault,
             )
             self.assertFalse(result.conflicts)
             home = manager.paths.home
@@ -45,14 +44,70 @@ class LifecycleTests(unittest.TestCase):
             if os.name != "nt":
                 # Windows 无 POSIX 执行位，chmod 为空操作，仅在校验有意义的平台断言。
                 self.assertTrue(init_script.stat().st_mode & 0o100)
-                self.assertEqual(manager.paths.config_file.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(manager.paths.state_file.stat().st_mode & 0o777, 0o600)
+            self.assertFalse(manager.paths.config_file.exists())
             self.assertEqual(manager.doctor(), [])
             state = manager.state()
             self.assertEqual(
                 state.selected_clients,
                 ["claude-code", "codex", "kimi-code", "opencode"],
             )
+
+    def test_shared_skills_install_without_client_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, vault = self.make_manager(Path(temp))
+            manager.install_skills()
+            home = manager.paths.home
+            self.assertTrue((home / ".agents" / "skills" / "execute-todo-loop" / "SKILL.md").is_file())
+            self.assertFalse((home / ".codex" / "AGENTS.md").exists())
+            self.assertEqual(manager.state().selected_clients, [])
+            self.assertTrue(manager.shared_skills_installed())
+            self.assertEqual(manager.doctor(), [])
+
+    def test_selected_skill_reports_version_difference_and_preserves_unselected_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, vault = self.make_manager(Path(temp))
+            target = manager.paths.home / ".agents" / "skills" / "execute-todo-loop"
+            target.mkdir(parents=True)
+            target.joinpath("SKILL.md").write_text("旧版本\n", encoding="utf-8")
+            _, changes = manager.plan_install_skills(["execute-todo-loop"])
+            self.assertEqual(changes[0].version_status, "different")
+            self.assertTrue(changes[0].conflict)
+            manager.install_skills(
+                skill_names=["execute-todo-loop"],
+                conflict_policy="replace",
+                confirmed_direct_replace=True,
+            )
+            self.assertTrue(target.joinpath("SKILL.md").is_file())
+            self.assertFalse((manager.paths.home / ".agents" / "skills" / "agent-dev-workflow-init").exists())
+
+    def test_rule_reports_version_difference_for_managed_block(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, vault = self.make_manager(Path(temp))
+            manager.install_rule("codex")
+            target = manager.paths.home / ".codex" / "AGENTS.md"
+            target.write_text(target.read_text(encoding="utf-8").replace("用户级智能体协作规则", "旧版规则"), encoding="utf-8")
+            _, changes = manager.plan_install_rule("codex")
+            self.assertEqual(changes[0].version_status, "different")
+            self.assertTrue(changes[0].conflict)
+
+    def test_repair_only_checks_selected_shared_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, vault = self.make_manager(Path(temp))
+            manager.install_skills(skill_names=["execute-todo-loop"])
+            _, changes = manager.plan_repair()
+            self.assertEqual([change.path.name for change in changes], ["execute-todo-loop"])
+
+    def test_single_rule_install_does_not_install_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, vault = self.make_manager(Path(temp))
+            manager.install_rule("codex")
+            home = manager.paths.home
+            self.assertTrue((home / ".codex" / "AGENTS.md").is_file())
+            self.assertFalse((home / ".agents" / "skills" / "execute-todo-loop").exists())
+            self.assertEqual(manager.state().selected_clients, ["codex"])
+            self.assertFalse(manager.shared_skills_installed())
+            self.assertEqual(manager.doctor(), [])
 
     def test_managed_block_preserves_user_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -61,8 +116,8 @@ class LifecycleTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_text("# 我的规则\n\n自定义内容\n", encoding="utf-8")
             with self.assertRaises(LifecycleError):
-                manager.install(["codex"], vault_root=vault)
-            manager.install(["codex"], vault_root=vault, conflict_policy="archive")
+                manager.install(["codex"])
+            manager.install(["codex"], conflict_policy="archive")
             installed = target.read_text(encoding="utf-8")
             self.assertIn(MANAGED_START, installed)
             self.assertNotIn("自定义内容", installed)
@@ -89,7 +144,7 @@ class LifecycleTests(unittest.TestCase):
             target = manager.paths.home / ".codex" / "AGENTS.md"
             target.parent.mkdir(parents=True)
             target.write_text("旧规则\n", encoding="utf-8")
-            result = manager.install(["codex"], vault_root=vault, conflict_policy="archive")
+            result = manager.install(["codex"], conflict_policy="archive")
             self.assertIsNotNone(result.archive)
             assert result.archive is not None
             with tarfile.open(result.archive, "r:gz") as archive:
@@ -106,10 +161,9 @@ class LifecycleTests(unittest.TestCase):
             target.parent.mkdir(parents=True)
             target.write_text("旧规则\n", encoding="utf-8")
             with self.assertRaises(LifecycleError):
-                manager.install(["codex"], vault_root=vault, conflict_policy="replace")
+                manager.install(["codex"], conflict_policy="replace")
             manager.install(
                 ["codex"],
-                vault_root=vault,
                 conflict_policy="replace",
                 confirmed_direct_replace=True,
             )
@@ -127,7 +181,7 @@ class LifecycleTests(unittest.TestCase):
             _, changes = manager.plan_install(["codex"])
             legacy = [change for change in changes if change.kind == "legacy-skill"]
             self.assertEqual(len(legacy), 2)
-            result = manager.install(["codex"], vault_root=vault, conflict_policy="archive")
+            result = manager.install(["codex"], conflict_policy="archive")
             self.assertIsNotNone(result.archive)
             self.assertFalse(legacy_root.joinpath("agent-dev-workflow-init").exists())
             self.assertFalse(legacy_root.joinpath("execute-todo-loop").exists())
@@ -142,7 +196,7 @@ class LifecycleTests(unittest.TestCase):
             root = Path(temp)
             custom = root / "custom-kimi"
             manager, vault = self.make_manager(root, {"KIMI_CODE_HOME": str(custom)})
-            manager.install(["kimi-code"], vault_root=vault)
+            manager.install(["kimi-code"])
             self.assertTrue((custom / "AGENTS.md").is_file())
 
     def test_relative_kimi_home_is_rejected(self) -> None:
@@ -154,7 +208,7 @@ class LifecycleTests(unittest.TestCase):
     def test_client_removal_keeps_shared_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, vault = self.make_manager(Path(temp))
-            manager.install(["codex", "opencode"], vault_root=vault)
+            manager.install(["codex", "opencode"])
             manager.set_clients(["opencode"])
             self.assertFalse((manager.paths.home / ".codex" / "AGENTS.md").exists())
             self.assertTrue((manager.paths.home / ".agents" / "skills" / "execute-todo-loop").is_dir())
@@ -163,7 +217,7 @@ class LifecycleTests(unittest.TestCase):
     def test_repair_detects_drift_and_can_archive_then_restore(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, vault = self.make_manager(Path(temp))
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             skill = manager.paths.home / ".agents" / "skills" / "execute-todo-loop" / "SKILL.md"
             skill.write_text("用户修改\n", encoding="utf-8")
             self.assertTrue(any(item.code == "target-drift" for item in manager.doctor()))
@@ -177,7 +231,12 @@ class LifecycleTests(unittest.TestCase):
     def test_uninstall_preserves_config_and_clears_owned_targets(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, vault = self.make_manager(Path(temp))
-            manager.install(["codex", "claude-code"], vault_root=vault)
+            manager.paths.config_file.parent.mkdir(parents=True)
+            manager.paths.config_file.write_text(
+                'version = 1\nvault_root = "/tmp/example-vault"\n\n[projects]\n',
+                encoding="utf-8",
+            )
+            manager.install(["codex", "claude-code"])
             manager.paths.cache_dir.mkdir(parents=True)
             manager.paths.cache_dir.joinpath("cache.bin").write_bytes(b"cache")
             manager.uninstall()
@@ -190,10 +249,17 @@ class LifecycleTests(unittest.TestCase):
             self.assertFalse(manager.paths.cache_dir.exists())
             self.assertFalse(manager.paths.state_file.exists())
 
+    def test_uninstall_clears_shared_skills_without_client_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            manager, vault = self.make_manager(Path(temp))
+            manager.install_skills()
+            manager.uninstall()
+            self.assertFalse((manager.paths.home / ".agents" / "skills" / "execute-todo-loop").exists())
+
     def test_uninstall_preserves_unowned_launchers(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, vault = self.make_manager(Path(temp))
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             manager.paths.bin_dir.mkdir(parents=True)
             manager.paths.launcher.write_text("#!/bin/sh\necho 其他程序\n", encoding="utf-8")
             manager.paths.long_launcher.write_text("其他程序\n", encoding="utf-8")
@@ -216,7 +282,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             manager, vault = self.make_manager(root)
-            manager.install(["codex"], vault_root=vault)
+            manager.install(["codex"])
             outside = root / "outside.txt"
             outside.write_text("不能删除\n", encoding="utf-8")
             data = json.loads(manager.paths.state_file.read_text(encoding="utf-8"))
@@ -231,7 +297,7 @@ class LifecycleTests(unittest.TestCase):
     def test_dry_run_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             manager, vault = self.make_manager(Path(temp))
-            manager.install(["codex"], vault_root=vault, dry_run=True)
+            manager.install(["codex"], dry_run=True)
             self.assertFalse((manager.paths.home / ".codex").exists())
             self.assertFalse(manager.paths.state_file.exists())
             self.assertFalse(manager.paths.config_file.exists())
